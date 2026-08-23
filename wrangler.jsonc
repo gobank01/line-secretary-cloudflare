@@ -16,6 +16,13 @@
       "migrations_dir": "migrations"
     }
   ],
+  "workflows": [
+    {
+      "name": "line-secretary-group-summarizer",
+      "binding": "GROUP_SUMMARIZER",
+      "class_name": "GroupSummarizer"
+    }
+  ],
   "triggers": { "crons": ["*/30 * * * *"] },
   "vars": {
     "APP_ENV": "local",
@@ -31,4 +38,3 @@
     "DASHBOARD_URL": "http://localhost:5173"
   }
 }
-

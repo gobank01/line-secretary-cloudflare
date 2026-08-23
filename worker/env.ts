@@ -1,5 +1,12 @@
+export interface GroupSummarizerParams {
+  groupId: string;
+  scheduledFor: number;
+  jobRunId?: number;
+}
+
 export interface AppEnv {
   DB: D1Database;
+  GROUP_SUMMARIZER: Workflow<GroupSummarizerParams>;
   APP_ENV: string;
   APP_TIMEZONE: string;
   OPENROUTER_MODEL: string;
@@ -18,4 +25,3 @@ export interface AppEnv {
   SESSION_SECRET: string;
   DASHBOARD_URL: string;
 }
-
