@@ -21,6 +21,7 @@
 ### อยู่ในขอบเขต
 
 - รับข้อความ text จากกลุ่ม LINE จริงแบบเงียบ
+- ส่งข้อความเปิดเผยการทำงานหนึ่งครั้งเมื่อถูกเชิญเข้ากลุ่ม จากนั้นเงียบตลอด
 - ตรวจลายเซ็น webhook และกัน event ซ้ำ
 - ตรวจ keyword เร่งด่วนทันทีโดยไม่เรียก AI
 - สรุปเฉพาะกลุ่มที่มีข้อความใหม่ทุก 30 นาที
@@ -30,13 +31,16 @@
 - ส่ง digest เข้าแชทส่วนตัวของเจ้าของสูงสุด 10 รอบต่อวันทำงาน และไม่ส่งเมื่อไม่มีข้อมูลใหม่
 - Seed ข้อมูลจำลอง 100 กลุ่มแบบ deterministic
 - เก็บ raw message 30 วัน แล้วลบอัตโนมัติ
+- จำกัดจำนวน AI calls/input tokens ต่อวันและรวมข้อความสั้นก่อนเรียก AI
+- เจ้าของ pause กลุ่ม, ลบ raw history และตรวจ audit log การเปลี่ยนหมวดได้
+- แยก local, preview และ production D1/secrets โดย production LINE push ปิดเป็นค่าเริ่มต้น
 - ติดตั้ง ทดสอบ สร้าง D1 ตั้ง secrets และ deploy ผ่าน CLI เท่าที่ credentials ในเครื่องอนุญาต
 
 ### ไม่อยู่ในขอบเขตของต้นแบบ
 
 - รองรับหลายเจ้าของหรือหลาย LINE OA ใน deployment เดียว
 - รับประกัน Free plan สำหรับกลุ่มจริง 100 กลุ่มที่มี traffic สูง
-- ตอบข้อความในกลุ่ม
+- ตอบข้อความในกลุ่มหลังจากข้อความเปิดเผยการทำงานครั้งแรก
 - ผู้ช่วยแชท 1:1, โน้ตส่วนตัว, to-do ส่วนตัว, สลิป, รายจ่าย, audio transcription และ order extraction จาก repo อ้างอิง
 - เก็บหรือประมวลผลรูปและเสียง
 - Mobile app แยกจากเว็บ
@@ -52,6 +56,8 @@
 5. Worker ตรวจ alert words ด้วยกฎ deterministic และสร้าง alert ได้ทันที
 6. Worker ตอบ HTTP 200 โดยไม่เรียก OpenRouter และไม่ตอบข้อความเข้า group
 
+เมื่อได้รับ join event ระบบ reply หนึ่งครั้งว่าอ่านข้อความเพื่อสรุปให้เจ้าของ เก็บข้อความดิบ 30 วัน และหลังจากนี้จะไม่ร่วมบทสนทนา ข้อความอื่นทุกชนิดใน group ไม่มี reply เมื่อได้รับ leave event ระบบ mark กลุ่ม inactive และหยุด scheduled processing ทันที
+
 เมื่อพบ group ID ใหม่ Worker จะบันทึกข้อความก่อน แล้วใช้ `ctx.waitUntil()` เรียก LINE Group Summary API เพื่อเติมชื่อกลุ่มภายหลัง ถ้าเรียกไม่สำเร็จให้แสดง group ID แบบย่อและ retry ใน scheduled maintenance โดยห้ามทำให้ webhook หลักช้าลง
 
 หาก D1 ล้มเหลว Worker ตอบ 500 เพื่อให้ LINE retry; unique key ทำให้ retry ไม่สร้างข้อความซ้ำ
@@ -63,14 +69,16 @@ Cron expression คือ `*/30 * * * *` และทำงานตาม UTC �
 ทุกรอบ coordinator จะ:
 
 1. ล้าง raw messages เกิน 30 วัน, reports เกิน 180 วัน และ auth attempts ที่หมดอายุ วันละครั้ง
-2. เลือกเฉพาะกลุ่ม `data_mode = real` ที่มีข้อความยังไม่ประมวลผล
+2. เลือกเฉพาะกลุ่ม `data_mode = real` ที่ active และมีข้อความยังไม่ประมวลผล
 3. เรียงกลุ่มจาก alert/ข้อความเก่าสุดก่อน และเลือกสูงสุด 10 กลุ่มต่อรอบ
 4. เริ่ม Workflow idempotent หนึ่ง instance ต่อกลุ่มและ time window
 5. ตรวจว่าถึง LINE digest slot หรือไม่
 
+กลุ่มมีสิทธิ์เรียก AI เมื่อมี keyword alert, มีข้อความใหม่อย่างน้อย 5 ข้อความ หรือข้อความเก่าสุดรอครบ 120 นาที หาก daily AI call cap 120 ครั้งหรือ input token cap 500,000 tokens เต็มแล้ว ให้คงข้อความใน backlog และแสดง budget warning โดย urgent deterministic alerts ยังทำงานตามปกติ
+
 Workflow ต่อกลุ่มมีสามขั้น:
 
-1. โหลดข้อความเก่าสุดที่ยังไม่ประมวลผล สูงสุด 200 ข้อความ
+1. โหลด rolling summary ก่อนหน้าและข้อความเก่าสุดที่ยังไม่ประมวลผล สูงสุด 200 ข้อความ
 2. เรียก OpenRouter ให้ตอบ structured JSON ตาม schema
 3. validate และบันทึก report, action items, priority, category suggestion และ processed checkpoint ด้วย D1 atomic batch
 
@@ -116,8 +124,10 @@ Dashboard API ที่เปิดในรุ่นแรกมีเฉพา
 - `GET /api/dashboard`, `GET /api/alerts?updated_after=...`
 - `GET /api/groups`, `GET /api/groups/:id`
 - `PATCH /api/groups/:id/category`
+- `PATCH /api/groups/:id/status`, `DELETE /api/groups/:id/raw-history`
 - `GET /api/categories`, `POST /api/categories`, `PATCH /api/categories/:id`
 - `PATCH /api/alerts/:id`
+- `GET /api/audit-log`
 - `GET /api/system/health`
 
 ## 5. โครงสร้างข้อมูล D1
@@ -175,6 +185,16 @@ AI เปลี่ยน `category_id` ได้เฉพาะเมื่อ `
 - `ip_hash`, `window_start`, `attempts`, `blocked_until`
 - Login ผิดได้ 5 ครั้งต่อ 15 นาทีต่อ IP hash จากนั้น block 15 นาที; เก็บเฉพาะ HMAC hash ไม่เก็บ IP ดิบ
 
+### `usage_daily`
+
+- `day` primary key, `ai_calls`, `ai_input_tokens`, `ai_output_tokens`, `line_pushes`, `updated_at`
+- Scheduled coordinator reserve call budget ก่อนสร้าง Workflow; Workflow reconcile token usage จาก OpenRouter response หลังจบ
+
+### `audit_log`
+
+- `id`, `actor` (`owner`, `ai`, `system`), `action`, `entity_type`, `entity_id`, `before_json`, `after_json`, `created_at`
+- เก็บเฉพาะ metadata ของการเปลี่ยน category/status/retention ห้ามเก็บ raw group message ในตารางนี้
+
 ## 6. Dashboard UX
 
 ### Shared controls
@@ -202,6 +222,7 @@ AI เปลี่ยน `category_id` ได้เฉพาะเมื่อ `
 - แสดง badge `REAL` หรือ `DEMO`, summary ล่าสุด, reports ย้อนหลัง, action items, unresolved questions และ alerts
 - แสดง excerpt ที่เกี่ยวข้อง ไม่โหลด raw conversation ทั้งหมดโดยอัตโนมัติ
 - เจ้าของแก้หมวด, lock/unlock หมวด และ mark alert status ได้
+- เจ้าของ pause/resume กลุ่ม, ลบ raw history และเปิดดู audit log ของกลุ่มได้
 
 ### States
 
@@ -216,6 +237,7 @@ AI เปลี่ยน `category_id` ได้เฉพาะเมื่อ `
 - LINE token, channel secret และ OpenRouter key ไม่ส่งไป browser และไม่เก็บใน D1
 - Log มีเฉพาะ request/job IDs, group hash, status และ latency ห้าม log raw message, token หรือ AI prompt content
 - Raw messages ถูกลบหลัง 30 วัน; reports เก็บ 180 วัน; demo reset ได้ทุกเมื่อ
+- หน้า join disclosure ระบุ retention 30 วันและการส่ง summary ให้เจ้าของอย่างชัดเจน
 
 ## 8. LINE digest และ quota guard
 
@@ -231,6 +253,7 @@ AI เปลี่ยน `category_id` ได้เฉพาะเมื่อ `
 
 - รับกลุ่มจริงสูงสุด 10 กลุ่มในต้นแบบ; กลุ่มถัดไปถูกบันทึกเป็น inactive พร้อม warning
 - Workflow สูงสุด 10 กลุ่มต่อ cron run และ 200 messages ต่อกลุ่มต่อ run
+- AI สูงสุด 120 calls และ 500,000 input tokens ต่อวัน; ข้อความต่ำกว่า 5 ข้อความถูกรวมได้ไม่เกิน 120 นาที
 - ไม่มีข้อความใหม่หมายถึงไม่มี OpenRouter call และไม่มี LINE push
 - Demo rows ไม่เข้าคิวงานและไม่เข้ารายงาน LINE
 - Queries ทุกตัวใช้ index และ pagination เพื่อควบคุม D1 rows read
@@ -257,6 +280,7 @@ AI เปลี่ยน `category_id` ได้เฉพาะเมื่อ `
 - urgent keyword matching
 - AI output schema validation
 - category suggestion, manual override และ lock
+- AI daily call/token reservation และ low-signal batching 5 ข้อความ/120 นาที
 - Bangkok work-hour calculation
 - daily/monthly digest quota และ empty-digest skip
 - demo exclusion จาก Workflow และ LINE
@@ -266,6 +290,8 @@ AI เปลี่ยน `category_id` ได้เฉพาะเมื่อ `
 
 - D1 migrations และ repository queries บน local Wrangler/Miniflare
 - webhook fixture → D1 rows → HTTP 200
+- join fixture → disclosure reply หนึ่งครั้ง; text fixture อื่นไม่มี group reply
+- leave fixture → group inactive และไม่ถูก scheduled processing เลือก
 - scheduled event → active group selection → mocked Workflow creation
 - mocked OpenRouter output → D1 atomic batch → processed checkpoint
 - LINE retry key ถูกใช้ซ้ำเมื่อ retry
@@ -280,6 +306,7 @@ AI เปลี่ยน `category_id` ได้เฉพาะเมื่อ `
 - toggle A+B รักษา filters และ dataset เดิม
 - real/demo filter, search, category drill-down
 - edit และ lock category
+- pause/resume group, delete raw history และดู audit log
 - acknowledge alert
 - loading/empty/error/stale states
 
@@ -297,7 +324,7 @@ npm run seed:demo:local
 npx wrangler deploy --dry-run
 ```
 
-หลังมี Cloudflare credentials ให้รัน migration, seed และ smoke test บน preview/production ผ่าน Wrangler CLI แล้วตรวจ webhook และ scheduled handler โดยไม่ส่ง LINE จริงจนกว่าจะเปิด production flag
+หลังมี Cloudflare credentials ให้รัน migration, seed และ smoke test บน preview ก่อน production ผ่าน Wrangler CLI แล้วตรวจ webhook และ scheduled handler โดยไม่ส่ง LINE จริงจนกว่าจะเปิด production flag
 
 ## 12. Deployment และ secrets
 
@@ -310,6 +337,8 @@ Bindings:
 - D1: `DB`
 - Workflow: `GROUP_SUMMARIZER`
 - Static assets: `ASSETS`
+
+Wrangler environments `preview` และ `production` ต้องใช้ D1 database IDs และ secrets คนละชุด Local development ใช้ local D1 ของ Miniflare เท่านั้น ห้ามให้ preview test เขียน production D1
 
 Secrets:
 
@@ -328,6 +357,10 @@ Vars ที่ไม่ลับ:
 - `OPENROUTER_MODEL=google/gemini-2.5-flash`
 - `REAL_GROUP_LIMIT=10`
 - `AUTOMATED_MONTHLY_PUSH_CAP=280`
+- `AI_DAILY_CALL_CAP=120`
+- `AI_DAILY_INPUT_TOKEN_CAP=500000`
+- `AI_MIN_MESSAGES=5`
+- `AI_MAX_WAIT_MINUTES=120`
 - `LINE_PUSH_ENABLED=false` จนกว่า production smoke test จะผ่าน
 
 Deploy production และเปลี่ยน LINE webhook URL ทำหลัง automated tests กับ preview ผ่านแล้วเท่านั้น การเปิด LINE push จริงต้องใช้ flag แยกเพื่อป้องกันข้อมูลจำลองหรือ smoke test กินโควตา
@@ -344,6 +377,9 @@ Deploy production และเปลี่ยน LINE webhook URL ทำหล�
 - Action/Category views สลับในหน้าเดิมและรักษา filters
 - LINE digest ไม่ส่งเมื่อไม่มีข้อมูลใหม่ ไม่เกิน 10 ครั้ง/วันทำงาน และไม่เกิน 280 ครั้ง/เดือน
 - Raw messages เกิน 30 วันถูกลบ
+- AI budget เต็มแล้วไม่สร้าง call เพิ่มและ backlog ยังไม่สูญหาย
+- join disclosure ส่งครั้งเดียว, leave/pause หยุดประมวลผล และ owner ลบ raw history ได้
+- Preview และ production ใช้ D1/secrets แยกกัน และ LINE push เปิดด้วย explicit production flag เท่านั้น
 - Test suite, production build และ Wrangler dry-run ผ่าน
 - ถ้า Cloudflare CLI authenticated: D1, migrations, secrets ที่ผู้ใช้มี, deployment และ smoke test ถูกทำผ่าน CLI
 
