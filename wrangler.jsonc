@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "line-secretary-cloudflare",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-08-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "line-secretary-cloudflare",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": { "crons": ["*/30 * * * *"] },
+  "vars": {
+    "APP_ENV": "local",
+    "APP_TIMEZONE": "Asia/Bangkok",
+    "OPENROUTER_MODEL": "google/gemini-2.5-flash",
+    "REAL_GROUP_LIMIT": "10",
+    "AUTOMATED_MONTHLY_PUSH_CAP": "280",
+    "AI_DAILY_CALL_CAP": "120",
+    "AI_DAILY_INPUT_TOKEN_CAP": "500000",
+    "AI_MIN_MESSAGES": "5",
+    "AI_MAX_WAIT_MINUTES": "120",
+    "LINE_PUSH_ENABLED": "false",
+    "DASHBOARD_URL": "http://localhost:5173"
+  }
+}
+

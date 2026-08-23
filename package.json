@@ -1,0 +1,48 @@
+{
+  "name": "line-secretary-cloudflare",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "deploy": "vite build && wrangler deploy",
+    "typecheck": "tsc -b",
+    "test:worker": "vitest run --config vitest.config.ts",
+    "test:ui": "vitest run --config vitest.ui.config.ts",
+    "test": "npm run test:worker && npm run test:ui",
+    "test:e2e": "playwright test",
+    "db:migrate:local": "wrangler d1 migrations apply line-secretary-cloudflare --local",
+    "seed:demo:local": "tsx scripts/seed-demo.ts --local"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "description": "",
+  "dependencies": {
+    "hono": "^4.13.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.53.1",
+    "@cloudflare/vitest-plugin": "^1.0.0",
+    "@cloudflare/workers-types": "^5.20260823.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "jsdom": "^29.1.1",
+    "playwright": "^1.62.1",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
+  }
+}

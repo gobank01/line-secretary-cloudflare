@@ -1,2 +1,9 @@
-.worktrees/
+node_modules/
+dist/
+.wrangler/
+.dev.vars*
+.generated/
+playwright-report/
+test-results/
 .DS_Store
+*.tsbuildinfo
