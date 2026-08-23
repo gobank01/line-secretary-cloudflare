@@ -1,4 +1,5 @@
 import type { AlertItem, AuditEntry, DashboardPayload, DataMode, GroupDetail } from "./types";
+import { compareActionPriority } from "./priority";
 
 export class ApiError extends Error {
   constructor(
@@ -67,10 +68,13 @@ function combineDashboards(demo: DashboardPayload, real: DashboardPayload): Dash
       normal: demo.kpis.normal + real.kpis.normal,
     },
     categories: [...categories.values()],
-    groups: [...demo.groups, ...real.groups].sort((left, right) => right.priorityScore - left.priorityScore),
-    actionQueue: [...demo.actionQueue, ...real.actionQueue].sort(
-      (left, right) => right.priorityScore - left.priorityScore,
+    groups: [...demo.groups, ...real.groups].sort((left, right) =>
+      compareActionPriority(
+        { ...left, groupId: left.id, lastActivityAt: left.lastMessageAt },
+        { ...right, groupId: right.id, lastActivityAt: right.lastMessageAt },
+      ),
     ),
+    actionQueue: [...demo.actionQueue, ...real.actionQueue].sort(compareActionPriority),
     health: real.health,
   };
 }

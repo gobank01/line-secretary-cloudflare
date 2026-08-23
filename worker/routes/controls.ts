@@ -31,6 +31,12 @@ function validName(value: unknown): value is string {
   return typeof value === "string" && value.trim().length >= 1 && value.trim().length <= 60;
 }
 
+function routeInteger(value: string): number | null {
+  if (!/^\d+$/u.test(value)) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 export const controlsRoutes = new Hono<{ Bindings: AppEnv }>();
 controlsRoutes.use("*", requireOwner);
 
@@ -54,8 +60,16 @@ controlsRoutes.patch("/groups/:id/category", requireMutationOrigin, async (conte
 controlsRoutes.patch("/groups/:id/status", requireMutationOrigin, async (context) => {
   const body = await bodyRecord(context);
   if (!body || typeof body.active !== "boolean") return context.json({ error: "invalid_request" }, 400);
-  const value = await setOwnerGroupStatus(context.env.DB, context.req.param("id"), body.active, Date.now());
-  return value ? context.json(value) : context.json({ error: "not_found" }, 404);
+  const result = await setOwnerGroupStatus(
+    context.env.DB,
+    context.req.param("id"),
+    body.active,
+    Date.now(),
+    Number.parseInt(context.env.REAL_GROUP_LIMIT, 10) || 10,
+  );
+  if (result.kind === "not_found") return context.json({ error: "not_found" }, 404);
+  if (result.kind === "limit") return context.json({ error: "real_group_limit" }, 409);
+  return context.json(result.value);
 });
 
 controlsRoutes.delete("/groups/:id/raw-history", requireMutationOrigin, async (context) => {
@@ -64,10 +78,10 @@ controlsRoutes.delete("/groups/:id/raw-history", requireMutationOrigin, async (c
 });
 
 controlsRoutes.patch("/alerts/:id", requireMutationOrigin, async (context) => {
-  const id = Number.parseInt(context.req.param("id"), 10);
+  const id = routeInteger(context.req.param("id"));
   const body = await bodyRecord(context);
   if (
-    !Number.isInteger(id) ||
+    id === null ||
     !body ||
     (body.status !== "open" && body.status !== "acknowledged" && body.status !== "resolved")
   ) {
@@ -100,9 +114,9 @@ controlsRoutes.post("/categories", requireMutationOrigin, async (context) => {
 });
 
 controlsRoutes.patch("/categories/:id", requireMutationOrigin, async (context) => {
-  const id = Number.parseInt(context.req.param("id"), 10);
+  const id = routeInteger(context.req.param("id"));
   const body = await bodyRecord(context);
-  if (!Number.isInteger(id) || !body || "slug" in body) return context.json({ error: "invalid_request" }, 400);
+  if (id === null || !body || "slug" in body) return context.json({ error: "invalid_request" }, 400);
   if (body.name !== undefined && !validName(body.name)) return context.json({ error: "invalid_name" }, 400);
   if (body.color !== undefined && (typeof body.color !== "string" || !COLOR_PATTERN.test(body.color))) {
     return context.json({ error: "invalid_color" }, 400);

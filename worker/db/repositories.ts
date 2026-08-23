@@ -1,5 +1,6 @@
 import type {
   ActionQueueItemDto,
+  AlertSeverity,
   CategorySummaryDto,
   DashboardHealthDto,
   DataMode,
@@ -83,14 +84,16 @@ export async function registerRealGroup(
   const existing = await findGroup(db, sourceId);
   if (existing) return { ...existing, created: false };
 
-  const active = (await countActiveRealGroups(db)) < activeLimit;
   const title = fallbackGroupTitle(sourceId);
   const insertion = await db
     .prepare(
       `INSERT INTO groups(source_id,title,data_mode,active,created_at,updated_at)
-       VALUES(?,?,'real',?,?,?) ON CONFLICT(source_id) DO NOTHING`,
+       SELECT ?,?,'real',CASE WHEN (
+         SELECT count(*) FROM groups WHERE data_mode='real' AND active=1
+       )<? THEN 1 ELSE 0 END,?,?
+       ON CONFLICT(source_id) DO NOTHING`,
     )
-    .bind(sourceId, title, active ? 1 : 0, now, now)
+    .bind(sourceId, title, activeLimit, now, now)
     .run();
 
   const group = await findGroup(db, sourceId);
@@ -124,8 +127,29 @@ export function markGroupLeft(db: D1Database, sourceId: string, now: number): Pr
 
 export function markDisclosureSent(db: D1Database, sourceId: string, now: number): Promise<D1Result> {
   return db
-    .prepare("UPDATE groups SET disclosure_sent_at = ?, updated_at = ? WHERE source_id = ? AND disclosure_sent_at IS NULL")
+    .prepare(
+      `UPDATE groups SET disclosure_sent_at=?,disclosure_claimed_at=NULL,updated_at=?
+       WHERE source_id=? AND disclosure_sent_at IS NULL`,
+    )
     .bind(now, now, sourceId)
+    .run();
+}
+
+export async function claimDisclosure(db: D1Database, sourceId: string, now: number): Promise<boolean> {
+  const result = await db.prepare(
+    `UPDATE groups SET disclosure_claimed_at=? WHERE source_id=? AND disclosure_sent_at IS NULL
+     AND (disclosure_claimed_at IS NULL OR disclosure_claimed_at<=?)`,
+  )
+    .bind(now, sourceId, now - 2 * 60_000)
+    .run();
+  return result.meta.changes === 1;
+}
+
+export function releaseDisclosureClaim(db: D1Database, sourceId: string, claimedAt: number): Promise<D1Result> {
+  return db.prepare(
+    "UPDATE groups SET disclosure_claimed_at=NULL WHERE source_id=? AND disclosure_claimed_at=? AND disclosure_sent_at IS NULL",
+  )
+    .bind(sourceId, claimedAt)
     .run();
 }
 
@@ -195,6 +219,8 @@ interface GroupSummaryRow {
   action_items_json: string | null;
   unresolved_json: string | null;
   open_alerts: number;
+  highest_open_alert_severity: AlertSeverity | null;
+  oldest_open_alert_at: number | null;
 }
 
 function stringArray(value: string | null): string[] {
@@ -233,6 +259,8 @@ function groupSummaryFrom(row: GroupSummaryRow): GroupSummaryDto {
     actionItems: stringArray(row.action_items_json),
     unresolvedQuestions: stringArray(row.unresolved_json),
     openAlerts: row.open_alerts,
+    highestOpenAlertSeverity: row.highest_open_alert_severity,
+    oldestOpenAlertAt: row.oldest_open_alert_at,
   };
 }
 
@@ -254,12 +282,18 @@ export async function listGroupSummaries(
         g.needs_category_review,g.category_locked,g.category_confidence,g.category_source,
         c.id AS category_id,c.slug AS category_slug,c.name AS category_name,
         c.color AS category_color,r.summary AS report_summary,r.action_items_json,r.unresolved_json,
-        (SELECT count(*) FROM alerts a WHERE a.group_id=g.source_id AND a.status='open') AS open_alerts
+        (SELECT count(*) FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved') AS open_alerts,
+        (SELECT severity FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved'
+         ORDER BY CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
+         created_at,id LIMIT 1) AS highest_open_alert_severity,
+        (SELECT min(created_at) FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved') AS oldest_open_alert_at
        FROM groups g
        LEFT JOIN categories c ON c.id=g.category_id
        LEFT JOIN reports r ON r.id=(SELECT id FROM reports WHERE group_id=g.source_id ORDER BY created_at DESC LIMIT 1)
        WHERE ${conditions.join(" AND ")}
-       ORDER BY g.priority_score DESC,COALESCE(g.last_message_at,0) DESC,g.source_id
+       ORDER BY CASE highest_open_alert_severity
+         WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+       COALESCE(oldest_open_alert_at,g.last_message_at,9223372036854775807),g.priority_score DESC,g.source_id
        LIMIT ? OFFSET ?`,
     )
     .bind(...bindings)
@@ -275,12 +309,17 @@ export async function getDashboardKpis(
 ): Promise<{ totalGroups: number; urgent: number; waiting: number; active: number; normal: number }> {
   const row = await db
     .prepare(
-      `SELECT count(*) AS total,
-        COALESCE(sum(CASE WHEN priority_score>=80 THEN 1 ELSE 0 END),0) AS urgent,
-        COALESCE(sum(CASE WHEN priority_score>=60 AND priority_score<80 THEN 1 ELSE 0 END),0) AS waiting,
-        COALESCE(sum(CASE WHEN priority_score>=30 AND priority_score<60 THEN 1 ELSE 0 END),0) AS active,
-        COALESCE(sum(CASE WHEN priority_score<30 THEN 1 ELSE 0 END),0) AS normal
-       FROM groups WHERE data_mode=?`,
+      `WITH ranked AS (
+         SELECT g.source_id,g.priority_score,COALESCE(max(CASE a.severity
+           WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END),0) AS alert_rank
+         FROM groups g LEFT JOIN alerts a ON a.group_id=g.source_id AND a.status!='resolved'
+         WHERE g.data_mode=? GROUP BY g.source_id,g.priority_score
+       ) SELECT count(*) AS total,
+        COALESCE(sum(CASE WHEN alert_rank>=3 OR priority_score>=80 THEN 1 ELSE 0 END),0) AS urgent,
+        COALESCE(sum(CASE WHEN alert_rank<3 AND priority_score<80 AND (alert_rank=2 OR priority_score>=60) THEN 1 ELSE 0 END),0) AS waiting,
+        COALESCE(sum(CASE WHEN alert_rank<2 AND priority_score<60 AND priority_score>=30 THEN 1 ELSE 0 END),0) AS active,
+        COALESCE(sum(CASE WHEN alert_rank<2 AND priority_score<30 THEN 1 ELSE 0 END),0) AS normal
+       FROM ranked`,
     )
     .bind(mode)
     .first<{ total: number; urgent: number; waiting: number; active: number; normal: number }>();
@@ -297,9 +336,12 @@ export async function listCategorySummaries(db: D1Database, mode: DataMode): Pro
   const result = await db
     .prepare(
       `SELECT c.id,c.slug,c.name,c.color,count(g.source_id) AS group_count,
-        COALESCE(sum(CASE WHEN g.priority_score>=80 THEN 1 ELSE 0 END),0) AS urgent_count,
+        COALESCE(sum(CASE WHEN g.priority_score>=80 OR EXISTS(
+          SELECT 1 FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved'
+          AND a.severity IN ('high','critical')
+        ) THEN 1 ELSE 0 END),0) AS urgent_count,
         COALESCE(sum(CASE WHEN g.priority_score>=60 OR EXISTS(
-          SELECT 1 FROM alerts a WHERE a.group_id=g.source_id AND a.status='open'
+          SELECT 1 FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved'
         ) THEN 1 ELSE 0 END),0) AS open_action_count
        FROM categories c
        LEFT JOIN groups g ON g.category_id=c.id AND g.data_mode=?
@@ -335,7 +377,6 @@ export function actionQueueFrom(groups: GroupSummaryDto[]): ActionQueueItemDto[]
         group.actionItems.length > 0 ||
         group.unresolvedQuestions.length > 0,
     )
-    .slice(0, 50)
     .map((group) => ({
       groupId: group.id,
       title: group.title,
@@ -346,8 +387,26 @@ export function actionQueueFrom(groups: GroupSummaryDto[]): ActionQueueItemDto[]
       actionItems: group.actionItems,
       unresolvedQuestions: group.unresolvedQuestions,
       openAlerts: group.openAlerts,
+      highestOpenAlertSeverity: group.highestOpenAlertSeverity,
+      oldestOpenAlertAt: group.oldestOpenAlertAt,
       lastActivityAt: group.lastMessageAt,
-    }));
+    }))
+    .sort((left, right) =>
+      alertSeverityRank(right.highestOpenAlertSeverity) - alertSeverityRank(left.highestOpenAlertSeverity) ||
+      (left.oldestOpenAlertAt ?? left.lastActivityAt ?? Number.MAX_SAFE_INTEGER) -
+        (right.oldestOpenAlertAt ?? right.lastActivityAt ?? Number.MAX_SAFE_INTEGER) ||
+      right.priorityScore - left.priorityScore ||
+      left.groupId.localeCompare(right.groupId),
+    )
+    .slice(0, 50);
+}
+
+function alertSeverityRank(value: AlertSeverity | null): number {
+  if (value === "critical") return 4;
+  if (value === "high") return 3;
+  if (value === "medium") return 2;
+  if (value === "low") return 1;
+  return 0;
 }
 
 export async function getGroupDetail(db: D1Database, sourceId: string) {
@@ -357,7 +416,11 @@ export async function getGroupDetail(db: D1Database, sourceId: string) {
         g.needs_category_review,g.category_locked,g.category_confidence,g.category_source,
         c.id AS category_id,c.slug AS category_slug,c.name AS category_name,
         c.color AS category_color,NULL AS report_summary,NULL AS action_items_json,NULL AS unresolved_json,
-        (SELECT count(*) FROM alerts a WHERE a.group_id=g.source_id AND a.status='open') AS open_alerts,
+        (SELECT count(*) FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved') AS open_alerts,
+        (SELECT severity FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved'
+         ORDER BY CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
+         created_at,id LIMIT 1) AS highest_open_alert_severity,
+        (SELECT min(created_at) FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved') AS oldest_open_alert_at,
         (SELECT count(*) FROM messages m WHERE m.group_id=g.source_id) AS message_count
        FROM groups g LEFT JOIN categories c ON c.id=g.category_id WHERE g.source_id=?`,
     )
@@ -517,6 +580,7 @@ export async function getSystemHealth(
     aiInputTokensToday,
     linePushesMonth,
     lastSuccessfulCron: lastCron ?? null,
+    platformMetrics: { source: "cloudflare_analytics", dashboardUrl: "https://dash.cloudflare.com/" },
     warnings,
   };
 }
@@ -593,22 +657,44 @@ export async function assignOwnerCategory(
   return { kind: "ok" as const, value: after };
 }
 
-export async function setOwnerGroupStatus(db: D1Database, sourceId: string, active: boolean, now: number) {
-  const group = await db.prepare("SELECT active FROM groups WHERE source_id=?").bind(sourceId).first<{ active: number }>();
-  if (!group) return null;
-  await db.batch([
-    db.prepare("UPDATE groups SET active=?,updated_at=? WHERE source_id=?").bind(active ? 1 : 0, now, sourceId),
-    auditStatement(
-      db,
-      active ? "group.resumed" : "group.paused",
-      "group",
-      sourceId,
-      { active: group.active === 1 },
-      { active },
-      now,
-    ),
-  ]);
-  return { active };
+export async function setOwnerGroupStatus(
+  db: D1Database,
+  sourceId: string,
+  active: boolean,
+  now: number,
+  activeLimit: number,
+) {
+  const group = await db.prepare("SELECT active,data_mode FROM groups WHERE source_id=?")
+    .bind(sourceId)
+    .first<{ active: number; data_mode: DataMode }>();
+  if (!group) return { kind: "not_found" as const };
+  if ((group.active === 1) === active) return { kind: "ok" as const, value: { active } };
+
+  const update = active
+    ? await db.prepare(
+        `UPDATE groups SET active=1,updated_at=? WHERE source_id=? AND (
+          data_mode='demo' OR (
+            SELECT count(*) FROM groups WHERE data_mode='real' AND active=1
+          )<?
+        )`,
+      )
+        .bind(now, sourceId, activeLimit)
+        .run()
+    : await db.prepare("UPDATE groups SET active=0,updated_at=? WHERE source_id=?")
+        .bind(now, sourceId)
+        .run();
+  if (update.meta.changes !== 1) return { kind: "limit" as const };
+
+  await auditStatement(
+    db,
+    active ? "group.resumed" : "group.paused",
+    "group",
+    sourceId,
+    { active: group.active === 1 },
+    { active },
+    now,
+  ).run();
+  return { kind: "ok" as const, value: { active } };
 }
 
 export async function deleteGroupRawHistory(db: D1Database, sourceId: string, now: number) {

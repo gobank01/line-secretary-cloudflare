@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import {
   getAlertWords,
+  claimDisclosure,
   insertKeywordAlert,
   insertMessage,
   markDisclosureSent,
   markGroupLeft,
   recordGroupJoin,
   registerRealGroup,
+  releaseDisclosureClaim,
   updateGroupLastMessage,
   updateGroupTitle,
 } from "../db/repositories";
@@ -16,6 +18,12 @@ import { InvalidLinePayloadError, parseLineEvents, type LineGroupEvent } from ".
 import { verifyLineSignature } from "../line/signature";
 
 const RETENTION_MS = 30 * 86_400_000;
+const encoder = new TextEncoder();
+
+async function shortGroupHash(groupId: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(groupId)));
+  return [...digest.slice(0, 6)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 async function refreshGroupName(db: D1Database, groupId: string, token: string, now: number): Promise<void> {
   try {
@@ -23,7 +31,7 @@ async function refreshGroupName(db: D1Database, groupId: string, token: string, 
     await updateGroupTitle(db, groupId, summary.groupName, now);
   } catch (error) {
     console.warn("line_group_name_lookup_failed", {
-      groupId,
+      groupHash: await shortGroupHash(groupId),
       name: error instanceof Error ? error.name : "UnknownError",
     });
   }
@@ -53,9 +61,16 @@ async function handleEvent(
         refreshGroupName(env.DB, event.groupId, env.LINE_CHANNEL_ACCESS_TOKEN, event.timestamp),
       );
     }
-    if (group.active && group.disclosureSentAt === null) {
-      const reply = await replyDisclosure(event.replyToken, env.LINE_CHANNEL_ACCESS_TOKEN);
-      if (reply.ok) await markDisclosureSent(env.DB, event.groupId, Date.now());
+    const disclosureClaimedAt = Date.now();
+    if (group.disclosureSentAt === null && await claimDisclosure(env.DB, event.groupId, disclosureClaimedAt)) {
+      try {
+        const reply = await replyDisclosure(event.replyToken, env.LINE_CHANNEL_ACCESS_TOKEN);
+        if (reply.ok) await markDisclosureSent(env.DB, event.groupId, Date.now());
+        else await releaseDisclosureClaim(env.DB, event.groupId, disclosureClaimedAt);
+      } catch (error) {
+        await releaseDisclosureClaim(env.DB, event.groupId, disclosureClaimedAt);
+        throw error;
+      }
     }
     return;
   }

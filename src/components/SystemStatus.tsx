@@ -26,6 +26,17 @@ export default function SystemStatus({ health, generatedAt }: SystemStatusProps)
             ? new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(lastCron)
             : "ยังไม่ทำงาน"}
         </span>
+        <span className="external-metrics">
+          Worker requests · D1 reads/writes · Workflow steps:{" "}
+          <a
+            href={health.platformMetrics?.dashboardUrl ?? "https://dash.cloudflare.com/"}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="เปิด Cloudflare Analytics"
+          >
+            ดูข้อมูลจริงจาก Cloudflare
+          </a>
+        </span>
       </div>
       {health.warnings.length > 0 ? (
         <div className="health-warnings" role="status" aria-label="คำเตือนระบบ">

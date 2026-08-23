@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../worker/index";
+import { registerRealGroup } from "../../worker/db/repositories";
 import { verifyLineSignature } from "../../worker/line/signature";
 
 const encoder = new TextEncoder();
@@ -114,8 +115,8 @@ describe("silent LINE ingestion", () => {
 
   it("sends the lifecycle disclosure only once, then marks leave inactive", async () => {
     const calls: string[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const request = new Request(input);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
       calls.push(new URL(request.url).pathname);
       if (request.method === "GET") return Response.json({ groupName: "ลูกค้าทดสอบ" });
       return Response.json({ sentMessages: [{ id: "sent-1", quoteToken: "quote-1" }] });
@@ -173,5 +174,76 @@ describe("silent LINE ingestion", () => {
         "C-eleventh",
       ),
     ).toBe(1);
+  });
+
+  it("atomically activates no more than ten concurrently registered real groups", async () => {
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) => registerRealGroup(env.DB, `C-race-${index}`, now + index, 10)),
+    );
+
+    expect(await scalar("SELECT count(*) AS count FROM groups WHERE data_mode='real' AND active=1")).toBe(10);
+  });
+
+  it("discloses collection on join even when the real-group limit pauses the group", async () => {
+    await env.DB.batch(
+      Array.from({ length: 10 }, (_, index) =>
+        env.DB.prepare(
+          `INSERT INTO groups(source_id,title,data_mode,active,created_at,updated_at)
+           VALUES(?,?,'real',1,?,?)`,
+        ).bind(`C-full-${index}`, `กลุ่มเต็ม ${index}`, now, now),
+      ),
+    );
+    const calls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      calls.push(new URL(request.url).pathname);
+      if (request.method === "GET") return Response.json({ groupName: "กลุ่มรอเปิด" });
+      return Response.json({ sentMessages: [{ id: "sent-limit", quoteToken: "quote-limit" }] });
+    });
+
+    expect((await postWebhook([lineEvent({ type: "join", replyToken: "reply-limit" }, "C-paused-join")])).status)
+      .toBe(200);
+
+    expect(calls.filter((path) => path.endsWith("/reply"))).toHaveLength(1);
+    expect(
+      await env.DB.prepare("SELECT active,disclosure_sent_at FROM groups WHERE source_id='C-paused-join'")
+        .first<{ active: number; disclosure_sent_at: number | null }>(),
+    ).toMatchObject({ active: 0, disclosure_sent_at: expect.any(Number) });
+  });
+
+  it("atomically sends only one disclosure for concurrent join deliveries", async () => {
+    let replyCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.method === "GET") return Response.json({ groupName: "กลุ่มพร้อมกัน" });
+      replyCalls += 1;
+      await Promise.resolve();
+      return Response.json({ sentMessages: [{ id: "sent-once", quoteToken: "quote-once" }] });
+    });
+
+    await Promise.all([
+      postWebhook([lineEvent({ type: "join", replyToken: "reply-race-a" }, "C-disclosure-race")]),
+      postWebhook([lineEvent({ type: "join", replyToken: "reply-race-b" }, "C-disclosure-race")]),
+    ]);
+
+    expect(replyCalls).toBe(1);
+  });
+
+  it("hashes group identifiers in lifecycle failure logs", async () => {
+    const groupId = "C-private-group-id-must-not-be-logged";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.method === "GET") throw new Error("LINE unavailable");
+      return Response.json({ sentMessages: [{ id: "sent-private", quoteToken: "quote-private" }] });
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect((await postWebhook([lineEvent({ type: "join", replyToken: "reply-private" }, groupId)])).status).toBe(200);
+
+    expect(warning).toHaveBeenCalledWith(
+      "line_group_name_lookup_failed",
+      expect.objectContaining({ groupHash: expect.stringMatching(/^[0-9a-f]{12}$/u) }),
+    );
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(groupId);
   });
 });

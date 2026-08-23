@@ -4,7 +4,7 @@ import {
   type WorkflowStep,
   type WorkflowStepConfig,
 } from "cloudflare:workers";
-import { summarizeGroup } from "../ai/openrouter";
+import { releaseAiCallSlot, summarizeGroup } from "../ai/openrouter";
 import type { SummaryOutputValue } from "../ai/schema";
 import type { AppEnv, GroupSummarizerParams } from "../env";
 
@@ -12,6 +12,7 @@ export interface WorkflowInput {
   groupId: string;
   title: string;
   categorySlugs: string[];
+  previousSummary: string | null;
   messages: Array<{ id: number; text: string; sentAt: number }>;
   periodStart: number;
   periodEnd: number;
@@ -32,11 +33,15 @@ export interface WorkflowStepRunner {
   ): Promise<T>;
 }
 
+const WORKFLOW_INPUT_BYTE_LIMIT = 240 * 1_024;
+const textEncoder = new TextEncoder();
+
 export async function loadWorkflowInput(
   db: D1Database,
   groupId: string,
   limit: number,
   includeProcessed = false,
+  cutoff = Number.MAX_SAFE_INTEGER,
 ): Promise<WorkflowInput | null> {
   const group = await db
     .prepare("SELECT title FROM groups WHERE source_id=? AND data_mode='real' AND active=1")
@@ -44,26 +49,63 @@ export async function loadWorkflowInput(
     .first<{ title: string }>();
   if (!group) return null;
 
-  const [categories, messages] = await Promise.all([
+  const [categories, messages, previousReport] = await Promise.all([
     db.prepare("SELECT slug FROM categories WHERE active=1 ORDER BY sort_order,id").all<{ slug: string }>(),
     db
       .prepare(
         `SELECT id,text,sent_at FROM messages WHERE group_id=? AND text IS NOT NULL
          ${includeProcessed ? "" : "AND processed_at IS NULL"}
+         AND sent_at<=?
          ORDER BY sent_at,id LIMIT ?`,
       )
-      .bind(groupId, limit)
+      .bind(groupId, cutoff, limit)
       .all<{ id: number; text: string; sent_at: number }>(),
+    db
+      .prepare("SELECT summary FROM reports WHERE group_id=? AND created_at<=? ORDER BY created_at DESC,id DESC LIMIT 1")
+      .bind(groupId, cutoff)
+      .first<{ summary: string }>(),
   ]);
-  if (messages.results.length === 0) return null;
+  const categorySlugs = categories.results.map((category) => category.slug);
+  const previousSummary = previousReport?.summary ?? null;
+  const boundedMessages: WorkflowInput["messages"] = [];
+  for (const message of messages.results) {
+    const mapped = { id: message.id, text: message.text, sentAt: message.sent_at };
+    const candidateMessages = [...boundedMessages, mapped];
+    const candidate: WorkflowInput = {
+      groupId,
+      title: group.title,
+      categorySlugs,
+      previousSummary,
+      messages: candidateMessages,
+      periodStart: candidateMessages[0]?.sentAt ?? 0,
+      periodEnd: candidateMessages.at(-1)?.sentAt ?? 0,
+    };
+    if (textEncoder.encode(JSON.stringify(candidate)).byteLength > WORKFLOW_INPUT_BYTE_LIMIT) break;
+    boundedMessages.push(mapped);
+  }
+  if (boundedMessages.length === 0) return null;
   return {
     groupId,
     title: group.title,
-    categorySlugs: categories.results.map((category) => category.slug),
-    messages: messages.results.map((message) => ({ id: message.id, text: message.text, sentAt: message.sent_at })),
-    periodStart: messages.results[0]?.sent_at ?? 0,
-    periodEnd: messages.results.at(-1)?.sent_at ?? 0,
+    categorySlugs,
+    previousSummary,
+    messages: boundedMessages,
+    periodStart: boundedMessages[0]?.sentAt ?? 0,
+    periodEnd: boundedMessages.at(-1)?.sentAt ?? 0,
   };
+}
+
+export async function releaseGroupSummaryReservation(
+  db: D1Database,
+  groupId: string,
+  scheduledFor: number,
+): Promise<void> {
+  await db.prepare(
+    `UPDATE groups SET summary_inflight_for=NULL,summary_inflight_until=NULL
+     WHERE source_id=? AND summary_inflight_for=?`,
+  )
+    .bind(groupId, scheduledFor)
+    .run();
 }
 
 export async function persistWorkflowResult(
@@ -72,12 +114,16 @@ export async function persistWorkflowResult(
   result: WorkflowResult,
   now: number,
   jobRunId?: number,
+  scheduledFor = now,
 ): Promise<{ created: boolean }> {
   const existing = await db
     .prepare("SELECT id FROM reports WHERE group_id=? AND period_start=? AND period_end=?")
     .bind(input.groupId, input.periodStart, input.periodEnd)
     .first<number>("id");
-  if (existing !== null) return { created: false };
+  if (existing !== null) {
+    await releaseGroupSummaryReservation(db, input.groupId, scheduledFor);
+    return { created: false };
+  }
 
   const placeholders = input.messages.map(() => "?").join(",");
   const statements: D1PreparedStatement[] = [
@@ -110,6 +156,8 @@ export async function persistWorkflowResult(
          ) THEN 'ai' ELSE category_source END,
          category_confidence=CASE WHEN category_locked=0 THEN ? ELSE category_confidence END,
          needs_category_review=CASE WHEN category_locked=0 THEN ? ELSE needs_category_review END,
+         summary_inflight_for=CASE WHEN summary_inflight_for=? THEN NULL ELSE summary_inflight_for END,
+         summary_inflight_until=CASE WHEN summary_inflight_for=? THEN NULL ELSE summary_inflight_until END,
          updated_at=? WHERE source_id=?`,
       )
       .bind(
@@ -119,6 +167,8 @@ export async function persistWorkflowResult(
         result.output.suggestedCategorySlug,
         result.output.categoryConfidence,
         result.output.categoryConfidence < 0.75 ? 1 : 0,
+        scheduledFor,
+        scheduledFor,
         now,
         input.groupId,
       ),
@@ -157,18 +207,28 @@ export async function runGroupSummarizerSteps(
   step: WorkflowStepRunner,
   now = Date.now(),
 ): Promise<{ status: "complete" | "empty" }> {
-  const input = await step.do("load bounded group input", async () => loadWorkflowInput(env.DB, payload.groupId, 200));
-  if (!input) return { status: "empty" };
+  const input = await step.do("load bounded group input", async () =>
+    loadWorkflowInput(env.DB, payload.groupId, 200, false, payload.scheduledFor),
+  );
+  if (!input) {
+    await step.do("release unused AI reservation", async () =>
+      releaseAiCallSlot(env.DB, payload.aiReservationId, payload.aiReservationDay, now),
+    );
+    return { status: "empty" };
+  }
 
   const result = await step.do(
     "summarize with openrouter",
     { retries: { limit: 3, delay: "10 seconds", backoff: "exponential" } },
-    async () => summarizeGroup(env, input, now),
+    async () => summarizeGroup(env, input, now, {
+      id: payload.aiReservationId,
+      day: payload.aiReservationDay,
+    }),
   );
   await step.do(
     "persist report and checkpoint",
     { retries: { limit: 3, delay: "5 seconds", backoff: "linear" } },
-    async () => persistWorkflowResult(env.DB, input, result, now, payload.jobRunId),
+    async () => persistWorkflowResult(env.DB, input, result, now, payload.jobRunId, payload.scheduledFor),
   );
   return { status: "complete" };
 }

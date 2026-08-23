@@ -2,6 +2,8 @@ export interface GroupSummarizerParams {
   groupId: string;
   scheduledFor: number;
   jobRunId?: number;
+  aiReservationId: string;
+  aiReservationDay: string;
 }
 
 export interface AppEnv {

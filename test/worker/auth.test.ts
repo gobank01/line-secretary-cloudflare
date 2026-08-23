@@ -2,7 +2,8 @@ import { env } from "cloudflare:workers";
 import { createExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../../worker/index";
-import { createSession, verifySession } from "../../worker/auth/session";
+import { createSession, passwordMatches, verifySession } from "../../worker/auth/session";
+import { hashLoginIp, recordLoginFailure } from "../../worker/auth/login-limit";
 
 const origin = "http://example.com";
 
@@ -19,6 +20,25 @@ beforeEach(async () => {
 });
 
 describe("owner sessions", () => {
+  it("fails closed when authentication secrets are missing or empty", async () => {
+    await expect(passwordMatches("", undefined)).resolves.toBe(false);
+    await expect(passwordMatches("anything", "")).resolves.toBe(false);
+    await expect(createSession(undefined, Date.now())).rejects.toThrow("SESSION_SECRET");
+    await expect(verifySession("invalid", undefined, Date.now())).resolves.toBe(false);
+
+    const missingPasswordEnv = { ...env, DASHBOARD_PASSWORD: undefined } as unknown as typeof env;
+    const response = await worker.fetch(
+      new Request(`${origin}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin },
+        body: JSON.stringify({ password: "" }),
+      }),
+      missingPasswordEnv,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(503);
+  });
+
   it("signs a 12-hour token and rejects tampering or expiration", async () => {
     const now = Date.UTC(2026, 7, 23, 12, 0, 0);
     const token = await createSession(env.SESSION_SECRET, now);
@@ -98,5 +118,38 @@ describe("owner sessions", () => {
     expect(rows.results).toHaveLength(1);
     expect(rows.results[0]?.ip_hash).not.toContain("203.0.113.42");
     expect(rows.results[0]?.ip_hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("atomically counts concurrent login failures", async () => {
+    const now = Date.UTC(2026, 7, 23, 12, 0, 0);
+    const ipHash = await hashLoginIp("198.51.100.9", env.SESSION_SECRET);
+
+    await Promise.all(Array.from({ length: 5 }, () => recordLoginFailure(env.DB, ipHash, now)));
+
+    const row = await env.DB.prepare("SELECT attempts,blocked_until FROM auth_attempts WHERE ip_hash=?")
+      .bind(ipHash)
+      .first<{ attempts: number; blocked_until: number | null }>();
+    expect(row?.attempts).toBe(5);
+    expect(row?.blocked_until).toBe(now + 15 * 60 * 1_000);
+  });
+
+  it("enforces the five-attempt allowance across concurrent HTTP requests", async () => {
+    const headers = {
+      "content-type": "application/json",
+      "cf-connecting-ip": "198.51.100.77",
+      origin,
+    };
+
+    const responses = await Promise.all(
+      Array.from({ length: 8 }, () => request("/api/auth/login", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ password: "wrong-password" }),
+      })),
+    );
+    const statuses = responses.map((response) => response.status);
+
+    expect(statuses.filter((status) => status === 401)).toHaveLength(5);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(3);
   });
 });

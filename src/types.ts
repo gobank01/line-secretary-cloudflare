@@ -1,4 +1,5 @@
 export type DataMode = "demo" | "real";
+export type AlertSeverity = "low" | "medium" | "high" | "critical";
 
 export interface CategorySummary {
   id: number;
@@ -27,6 +28,8 @@ export interface GroupSummary {
   actionItems: string[];
   unresolvedQuestions: string[];
   openAlerts: number;
+  highestOpenAlertSeverity: AlertSeverity | null;
+  oldestOpenAlertAt: number | null;
 }
 
 export interface ActionQueueItem {
@@ -39,6 +42,8 @@ export interface ActionQueueItem {
   actionItems: string[];
   unresolvedQuestions: string[];
   openAlerts: number;
+  highestOpenAlertSeverity: AlertSeverity | null;
+  oldestOpenAlertAt: number | null;
   lastActivityAt: number | null;
 }
 
@@ -48,6 +53,7 @@ export interface SystemHealth {
   aiInputTokensToday: number;
   linePushesMonth: number;
   lastSuccessfulCron: number | null;
+  platformMetrics: { source: "cloudflare_analytics"; dashboardUrl: string };
   warnings: string[];
 }
 

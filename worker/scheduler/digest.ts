@@ -28,6 +28,25 @@ interface DigestReport {
   created_at: number;
 }
 
+interface DigestSelection {
+  text: string;
+  alertIds: number[];
+  reportIds: number[];
+}
+
+interface RetryableDelivery {
+  id: number;
+  retry_key: string;
+  message_text: string;
+  alert_ids_json: string;
+  report_ids_json: string;
+  quota_day: string | null;
+  quota_month: string | null;
+}
+
+const LINE_TEXT_LIMIT = 5_000;
+const DIGEST_TEXT_LIMIT = 4_950;
+
 export function localDateTimeParts(now: number, timeZone = "Asia/Bangkok") {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -59,57 +78,79 @@ function parseStringArray(value: string): string[] {
   }
 }
 
-function formatDigest(alerts: DigestAlert[], reports: DigestReport[], dashboardUrl: string): string {
-  const footer = `\nดูรายละเอียดทั้งหมด: ${dashboardUrl}`;
-  const lines = ["สรุปเลขากลุ่ม"];
-  let length = lines[0].length + footer.length;
-  const append = (line: string) => {
-    if (length + line.length + 1 > 4_950) return false;
-    lines.push(line);
-    length += line.length + 1;
-    return true;
-  };
+function compact(value: string, maximum: number): string {
+  return value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
+}
 
+function renderDigest(alerts: DigestAlert[], reports: DigestReport[], dashboardUrl: string): string {
+  const lines = ["สรุปเลขากลุ่ม"];
   if (alerts.length > 0) {
-    append("");
-    append("🚨 เรื่องเร่งด่วน");
+    lines.push("", "🚨 เรื่องเร่งด่วน");
     for (const alert of alerts) {
-      if (!append(`• [${alert.severity.toUpperCase()}] ${alert.group_title}: ${alert.excerpt}`)) break;
+      lines.push(
+        `• [${alert.severity.toUpperCase()}] ${compact(alert.group_title, 100)}: ${compact(alert.excerpt, 240)}`,
+      );
     }
   }
 
   const actionReports = reports.filter((report) => parseStringArray(report.action_items_json).length > 0);
   if (actionReports.length > 0) {
-    append("");
-    append("✅ งานที่ต้องทำ");
+    lines.push("", "✅ งานที่ต้องทำ");
     for (const report of actionReports) {
-      for (const action of parseStringArray(report.action_items_json)) {
-        if (!append(`• ${report.group_title}: ${action}`)) break;
+      const actions = parseStringArray(report.action_items_json);
+      for (const action of actions.slice(0, 3)) {
+        lines.push(`• ${compact(report.group_title, 100)}: ${compact(action, 220)}`);
       }
+      if (actions.length > 3) lines.push(`  …และอีก ${actions.length - 3} งาน ดูต่อบนเว็บ`);
     }
   }
 
   if (reports.length > 0) {
-    append("");
-    append("📂 สรุปตามหมวด");
+    lines.push("", "📂 สรุปตามหมวด");
     for (const report of reports) {
-      if (!append(`• ${report.category_name ?? "ยังไม่จัดหมวด"} — ${report.group_title}: ${report.summary}`)) break;
+      lines.push(
+        `• ${compact(report.category_name ?? "ยังไม่จัดหมวด", 60)} — ${compact(report.group_title, 100)}: ${compact(report.summary, 420)}`,
+      );
     }
   }
 
-  return `${lines.join("\n")}${footer}`.slice(0, 5_000);
+  return `${lines.join("\n")}\nดูรายละเอียดทั้งหมด: ${compact(dashboardUrl, 500)}`;
 }
 
-async function loadDigestContent(db: D1Database) {
+function selectDigestContent(alerts: DigestAlert[], reports: DigestReport[], dashboardUrl: string): DigestSelection {
+  const selectedAlerts: DigestAlert[] = [];
+  const selectedReports: DigestReport[] = [];
+  for (const alert of alerts) {
+    const candidate = renderDigest([...selectedAlerts, alert], selectedReports, dashboardUrl);
+    if (candidate.length > DIGEST_TEXT_LIMIT) break;
+    selectedAlerts.push(alert);
+  }
+  for (const report of reports) {
+    const candidate = renderDigest(selectedAlerts, [...selectedReports, report], dashboardUrl);
+    if (candidate.length > DIGEST_TEXT_LIMIT) break;
+    selectedReports.push(report);
+  }
+  const text = renderDigest(selectedAlerts, selectedReports, dashboardUrl);
+  if (text.length > LINE_TEXT_LIMIT) throw new Error("Digest formatter exceeded the LINE text limit");
+  return {
+    text,
+    alertIds: selectedAlerts.map((item) => item.id),
+    reportIds: selectedReports.map((item) => item.id),
+  };
+}
+
+async function loadDigestContent(db: D1Database, cutoff: number) {
   const [alerts, reports] = await Promise.all([
     db
       .prepare(
         `SELECT a.id,g.title AS group_title,a.severity,a.excerpt,a.created_at
          FROM alerts a JOIN groups g ON g.source_id=a.group_id
-         WHERE g.data_mode='real' AND a.notified_at IS NULL AND a.status='open'
+         WHERE g.data_mode='real' AND a.notified_at IS NULL AND a.digest_finalized_at IS NULL
+         AND a.status='open' AND a.created_at<=?
          ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
          a.created_at,a.id LIMIT 50`,
       )
+      .bind(cutoff)
       .all<DigestAlert>(),
     db
       .prepare(
@@ -117,9 +158,10 @@ async function loadDigestContent(db: D1Database) {
          r.priority_score,r.created_at
          FROM reports r JOIN groups g ON g.source_id=r.group_id
          LEFT JOIN categories c ON c.id=g.category_id
-         WHERE g.data_mode='real' AND r.notified_at IS NULL
+         WHERE g.data_mode='real' AND r.notified_at IS NULL AND r.digest_finalized_at IS NULL AND r.created_at<=?
          ORDER BY r.priority_score DESC,r.created_at,r.id LIMIT 100`,
       )
+      .bind(cutoff)
       .all<DigestReport>(),
   ]);
   return { alerts: alerts.results, reports: reports.results };
@@ -132,41 +174,141 @@ function updateIds(db: D1Database, table: "alerts" | "reports", ids: number[], n
     .bind(now, ...ids);
 }
 
+function finalizeIds(db: D1Database, table: "alerts" | "reports", ids: number[], now: number): D1PreparedStatement | null {
+  if (ids.length === 0) return null;
+  return db
+    .prepare(`UPDATE ${table} SET digest_finalized_at=? WHERE id IN (${ids.map(() => "?").join(",")})`)
+    .bind(now, ...ids);
+}
+
 export async function runDigest(env: DigestEnv, scheduledTime: number): Promise<{ status: string; deliveryId?: number }> {
   if (env.LINE_PUSH_ENABLED !== "true") return { status: "disabled" };
 
-  const content = await loadDigestContent(env.DB);
-  if (content.alerts.length === 0 && content.reports.length === 0) return { status: "empty" };
-
   const local = localDateTimeParts(scheduledTime, env.APP_TIMEZONE);
+  const retryable = await env.DB.prepare(
+    `SELECT id,retry_key,message_text,alert_ids_json,report_ids_json,quota_day,quota_month
+     FROM digest_deliveries
+     WHERE created_at>=? AND message_text IS NOT NULL
+       AND ((status='failed' AND (
+         error='network_error' OR error IN ('line_status_408','line_status_429') OR error GLOB 'line_status_5??'
+       )) OR (status='pending' AND COALESCE(attempted_at,created_at)<=?))
+     ORDER BY created_at,id LIMIT 1`,
+  )
+    .bind(scheduledTime - 24 * 60 * 60_000, scheduledTime - 60_000)
+    .first<RetryableDelivery>();
   const [dailyCount, monthlyCount] = await Promise.all([
     env.DB
-      .prepare("SELECT count(*) AS count FROM digest_deliveries WHERE slot_key LIKE ? AND status IN ('pending','sent')")
-      .bind(`${local.day}-%`)
+      .prepare("SELECT count(*) AS count FROM digest_deliveries WHERE quota_day=? AND status IN ('pending','sent')")
+      .bind(local.day)
       .first<number>("count"),
     env.DB
-      .prepare("SELECT count(*) AS count FROM digest_deliveries WHERE slot_key LIKE ? AND status IN ('pending','sent')")
-      .bind(`${local.month}-%`)
+      .prepare("SELECT count(*) AS count FROM digest_deliveries WHERE quota_month=? AND status IN ('pending','sent')")
+      .bind(local.month)
       .first<number>("count"),
   ]);
-  if ((dailyCount ?? 0) >= 10) return { status: "daily_cap" };
   const monthlyCap = Number.parseInt(env.AUTOMATED_MONTHLY_PUSH_CAP, 10) || 280;
-  if ((monthlyCount ?? 0) >= monthlyCap) return { status: "monthly_cap" };
+  const ownsDailyReservation = retryable?.quota_day === local.day;
+  const ownsMonthlyReservation = retryable?.quota_month === local.month;
+  if ((dailyCount ?? 0) >= 10 && !ownsDailyReservation) return { status: "daily_cap" };
+  if ((monthlyCount ?? 0) >= monthlyCap && !ownsMonthlyReservation) return { status: "monthly_cap" };
 
-  const slotKey = `${local.day}-${String(local.hour).padStart(2, "0")}`;
-  const retryKey = crypto.randomUUID();
-  const createdAt = Date.now();
-  const times = [...content.alerts.map((item) => item.created_at), ...content.reports.map((item) => item.created_at)];
-  const reservation = await env.DB.prepare(
-    `INSERT INTO digest_deliveries(slot_key,retry_key,period_start,period_end,status,message_count,created_at)
-     VALUES(?,?,?,?,'pending',?,?) ON CONFLICT(slot_key) DO NOTHING`,
-  )
-    .bind(slotKey, retryKey, Math.min(...times), Math.max(...times), 1, createdAt)
-    .run();
-  if (reservation.meta.changes !== 1) return { status: "duplicate" };
-  const deliveryId =
-    (await env.DB.prepare("SELECT id FROM digest_deliveries WHERE slot_key=?").bind(slotKey).first<number>("id")) ?? 0;
-  const text = formatDigest(content.alerts, content.reports, env.DASHBOARD_URL);
+  let deliveryId: number;
+  let retryKey: string;
+  let text: string;
+  let alertIds: number[];
+  let reportIds: number[];
+  if (retryable) {
+    const retryReservation = await env.DB.prepare(
+      `UPDATE digest_deliveries
+       SET status='pending',error=NULL,quota_day=?,quota_month=?,attempted_at=?
+       WHERE id=? AND created_at>=?
+         AND ((status='failed' AND (
+           error='network_error' OR error IN ('line_status_408','line_status_429') OR error GLOB 'line_status_5??'
+         )) OR (status='pending' AND COALESCE(attempted_at,created_at)<=?))
+         AND (quota_day=? OR (
+           SELECT count(*) FROM digest_deliveries WHERE quota_day=? AND status IN ('pending','sent')
+         )<10)
+         AND (quota_month=? OR (
+           SELECT count(*) FROM digest_deliveries WHERE quota_month=? AND status IN ('pending','sent')
+         )<?)`,
+    )
+      .bind(
+        local.day,
+        local.month,
+        scheduledTime,
+        retryable.id,
+        scheduledTime - 24 * 60 * 60_000,
+        scheduledTime - 60_000,
+        local.day,
+        local.day,
+        local.month,
+        local.month,
+        monthlyCap,
+      )
+      .run();
+    if (retryReservation.meta.changes !== 1) return { status: "duplicate" };
+    deliveryId = retryable.id;
+    retryKey = retryable.retry_key;
+    text = retryable.message_text;
+    alertIds = parseNumberArray(retryable.alert_ids_json);
+    reportIds = parseNumberArray(retryable.report_ids_json);
+  } else {
+    const content = await loadDigestContent(env.DB, scheduledTime);
+    if (content.alerts.length === 0 && content.reports.length === 0) return { status: "empty" };
+    const selection = selectDigestContent(content.alerts, content.reports, env.DASHBOARD_URL);
+    if (selection.alertIds.length === 0 && selection.reportIds.length === 0) return { status: "empty" };
+
+    const slotKey = `${local.day}-${String(local.hour).padStart(2, "0")}`;
+    retryKey = crypto.randomUUID();
+    text = selection.text;
+    alertIds = selection.alertIds;
+    reportIds = selection.reportIds;
+    const includedAlerts = new Set(alertIds);
+    const includedReports = new Set(reportIds);
+    const times = [
+      ...content.alerts.filter((item) => includedAlerts.has(item.id)).map((item) => item.created_at),
+      ...content.reports.filter((item) => includedReports.has(item.id)).map((item) => item.created_at),
+    ];
+    const reservation = await env.DB.prepare(
+      `INSERT INTO digest_deliveries(slot_key,retry_key,period_start,period_end,status,message_count,created_at,
+       message_text,alert_ids_json,report_ids_json,quota_day,quota_month,attempted_at)
+       SELECT ?,?,?,?,'pending',?,?,?,?,?,?,?,?
+       WHERE (SELECT count(*) FROM digest_deliveries WHERE quota_day=? AND status IN ('pending','sent'))<10
+         AND (SELECT count(*) FROM digest_deliveries WHERE quota_month=? AND status IN ('pending','sent'))<?
+       ON CONFLICT(slot_key) DO NOTHING`,
+    )
+      .bind(
+        slotKey,
+        retryKey,
+        Math.min(...times),
+        Math.max(...times),
+        1,
+        scheduledTime,
+        text,
+        JSON.stringify(alertIds),
+        JSON.stringify(reportIds),
+        local.day,
+        local.month,
+        scheduledTime,
+        local.day,
+        local.month,
+        monthlyCap,
+      )
+      .run();
+    if (reservation.meta.changes !== 1) {
+      const existing = await env.DB.prepare("SELECT id FROM digest_deliveries WHERE slot_key=?")
+        .bind(slotKey)
+        .first<number>("id");
+      if (existing !== null) return { status: "duplicate" };
+      const latestDailyCount = await env.DB
+        .prepare("SELECT count(*) AS count FROM digest_deliveries WHERE quota_day=? AND status IN ('pending','sent')")
+        .bind(local.day)
+        .first<number>("count");
+      return { status: (latestDailyCount ?? 0) >= 10 ? "daily_cap" : "monthly_cap" };
+    }
+    deliveryId =
+      (await env.DB.prepare("SELECT id FROM digest_deliveries WHERE slot_key=?").bind(slotKey).first<number>("id")) ?? 0;
+  }
 
   let lastStatus = 0;
   let requestId: string | null = null;
@@ -187,15 +329,28 @@ export async function runDigest(env: DigestEnv, scheduledTime: number): Promise<
   }
 
   if (!accepted) {
-    await env.DB.prepare("UPDATE digest_deliveries SET status='failed',error=? WHERE id=?")
-      .bind(lastStatus === 0 ? "network_error" : `line_status_${lastStatus}`, deliveryId)
-      .run();
+    const retryableFailure = lastStatus === 0 || lastStatus === 408 || lastStatus === 429 || lastStatus >= 500;
+    const failureStatements: D1PreparedStatement[] = [
+      env.DB.prepare(
+        "UPDATE digest_deliveries SET status='failed',error=?,quota_day=NULL,quota_month=NULL WHERE id=?",
+      )
+        .bind(lastStatus === 0 ? "network_error" : `line_status_${lastStatus}`, deliveryId),
+    ];
+    if (!retryableFailure) {
+      const alertFinalization = finalizeIds(env.DB, "alerts", alertIds, scheduledTime);
+      const reportFinalization = finalizeIds(env.DB, "reports", reportIds, scheduledTime);
+      if (alertFinalization) failureStatements.push(alertFinalization);
+      if (reportFinalization) failureStatements.push(reportFinalization);
+    }
+    await env.DB.batch(failureStatements);
     return { status: "failed", deliveryId };
   }
 
   const notifiedAt = Date.now();
   const statements: D1PreparedStatement[] = [
-    env.DB.prepare("UPDATE digest_deliveries SET status='sent',line_request_id=?,sent_at=?,error=NULL WHERE id=?")
+    env.DB.prepare(
+      "UPDATE digest_deliveries SET status='sent',line_request_id=?,sent_at=?,error=NULL,message_text=NULL WHERE id=?",
+    )
       .bind(requestId, notifiedAt, deliveryId),
     env.DB.prepare(
       `INSERT INTO usage_daily(day,ai_calls,ai_input_tokens,ai_output_tokens,line_pushes,updated_at)
@@ -203,10 +358,21 @@ export async function runDigest(env: DigestEnv, scheduledTime: number): Promise<
        line_pushes=usage_daily.line_pushes+1,updated_at=excluded.updated_at`,
     ).bind(local.day, notifiedAt),
   ];
-  const alertUpdate = updateIds(env.DB, "alerts", content.alerts.map((item) => item.id), notifiedAt);
-  const reportUpdate = updateIds(env.DB, "reports", content.reports.map((item) => item.id), notifiedAt);
+  const alertUpdate = updateIds(env.DB, "alerts", alertIds, notifiedAt);
+  const reportUpdate = updateIds(env.DB, "reports", reportIds, notifiedAt);
   if (alertUpdate) statements.push(alertUpdate);
   if (reportUpdate) statements.push(reportUpdate);
   await env.DB.batch(statements);
   return { status: "sent", deliveryId };
+}
+
+function parseNumberArray(value: string): number[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is number => typeof item === "number" && Number.isInteger(item))
+      : [];
+  } catch {
+    return [];
+  }
 }

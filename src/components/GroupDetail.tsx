@@ -185,9 +185,14 @@ export default function GroupDetail({ groupId, categories, onClose, onChanged }:
             {detail.alerts.map((alert) => (
               <article className="detail-alert" key={alert.id}>
                 <div><span className={`severity-label severity-label--${alert.severity === "critical" || alert.severity === "high" ? "danger" : "warning"}`}>{alert.severity}</span><p>{alert.excerpt}</p></div>
-                {alert.status === "open" ? (
-                  <button className="button button--quiet" type="button" disabled={busy} onClick={() => void mutate(() => setAlertStatus(alert.id, "acknowledged"))}>รับทราบ</button>
-                ) : <span className="state-badge state-badge--active">รับทราบแล้ว</span>}
+                <div className="detail-alert-actions">
+                  {alert.status === "open" ? (
+                    <button className="button button--quiet" type="button" disabled={busy} onClick={() => void mutate(() => setAlertStatus(alert.id, "acknowledged"))}>รับทราบ</button>
+                  ) : <span className="state-badge state-badge--active">{alert.status === "resolved" ? "ปิดแล้ว" : "รับทราบแล้ว"}</span>}
+                  {alert.status !== "resolved" ? (
+                    <button className="button button--quiet" type="button" disabled={busy} onClick={() => void mutate(() => setAlertStatus(alert.id, "resolved"))}>ปิดเรื่อง</button>
+                  ) : null}
+                </div>
               </article>
             ))}
           </div>

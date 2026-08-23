@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { applyD1Migrations } from "cloudflare:test";
+import { applyD1Migrations, type D1Migration } from "cloudflare:test";
 
 const testEnv = env as unknown as {
   DB: D1Database;
@@ -7,4 +7,3 @@ const testEnv = env as unknown as {
 };
 
 await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
-

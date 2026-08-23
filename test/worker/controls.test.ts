@@ -89,6 +89,30 @@ describe("owner controls", () => {
     expect(await env.DB.prepare("SELECT count(*) AS count FROM alerts WHERE group_id='C-control'").first("count")).toBe(1);
   });
 
+  it("refuses to resume an eleventh real group", async () => {
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO groups(source_id,title,data_mode,active,created_at,updated_at)
+       VALUES('C-resume-cap','กลุ่มที่พักอยู่','real',0,1,1)`,
+    ).run();
+    await env.DB.batch(
+      Array.from({ length: 10 }, (_, index) =>
+        env.DB.prepare(
+          `INSERT OR REPLACE INTO groups(source_id,title,data_mode,active,created_at,updated_at)
+           VALUES(?,?,'real',1,1,1)`,
+        ).bind(`C-resume-active-${index}`, `กลุ่มเปิด ${index}`),
+      ),
+    );
+
+    const response = await api("/api/groups/C-resume-cap/status", {
+      method: "PATCH",
+      body: JSON.stringify({ active: true }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: "real_group_limit" });
+    expect(await env.DB.prepare("SELECT active FROM groups WHERE source_id='C-resume-cap'").first("active")).toBe(0);
+  });
+
   it("resolves an alert and records its timestamp", async () => {
     const alertId = await env.DB.prepare("SELECT id FROM alerts WHERE group_id='C-control'").first<number>("id");
     const response = await api(`/api/alerts/${alertId}`, {
@@ -148,5 +172,16 @@ describe("owner controls", () => {
       createExecutionContext(),
     );
     expect(response.status).toBe(403);
+  });
+
+  it("rejects partially numeric route identifiers", async () => {
+    expect((await api("/api/alerts/12junk", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "resolved" }),
+    })).status).toBe(400);
+    expect((await api("/api/categories/12junk", {
+      method: "PATCH",
+      body: JSON.stringify({ name: "ผิด" }),
+    })).status).toBe(400);
   });
 });

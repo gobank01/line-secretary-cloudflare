@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { clearLoginFailures, hashLoginIp, isLoginBlocked, recordLoginFailure } from "../auth/login-limit";
 import {
+  authConfigurationValid,
   createSession,
   expiredSessionCookie,
   passwordMatches,
@@ -13,6 +14,9 @@ import type { AppEnv } from "../env";
 export const authRoutes = new Hono<{ Bindings: AppEnv }>();
 
 authRoutes.post("/login", requireMutationOrigin, async (context) => {
+  if (!authConfigurationValid(context.env.DASHBOARD_PASSWORD, context.env.SESSION_SECRET)) {
+    return context.json({ error: "authentication_unavailable" }, 503);
+  }
   const ipHash = await hashLoginIp(
     context.req.header("cf-connecting-ip") ?? "unknown",
     context.env.SESSION_SECRET,
@@ -34,7 +38,8 @@ authRoutes.post("/login", requireMutationOrigin, async (context) => {
   }
 
   if (!(await passwordMatches(password, context.env.DASHBOARD_PASSWORD))) {
-    await recordLoginFailure(context.env.DB, ipHash, now);
+    const failure = await recordLoginFailure(context.env.DB, ipHash, now);
+    if (failure.attempts > 5) return context.json({ error: "too_many_attempts" }, 429);
     return context.json({ error: "invalid_credentials" }, 401);
   }
 

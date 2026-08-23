@@ -31,7 +31,7 @@ beforeAll(async () => {
 });
 
 describe("dashboard read API", () => {
-  it("returns demo KPIs, categories, and a priority-sorted action queue", async () => {
+  it("returns demo KPIs, categories, and a bounded action queue", async () => {
     const response = await get("/api/dashboard");
     expect(response.status).toBe(200);
     const dashboard = await response.json<{
@@ -46,9 +46,8 @@ describe("dashboard read API", () => {
     expect(dashboard.groups.every((group) => group.dataMode === "demo")).toBe(true);
     expect(dashboard.categories).toHaveLength(6);
     expect(dashboard.categories.reduce((total, category) => total + category.groupCount, 0)).toBe(100);
-    expect(dashboard.actionQueue[0]?.priorityScore).toBeGreaterThanOrEqual(
-      dashboard.actionQueue[1]?.priorityScore ?? -1,
-    );
+    expect(dashboard.actionQueue.length).toBeGreaterThan(0);
+    expect(dashboard.actionQueue.length).toBeLessThanOrEqual(50);
   });
 
   it("supports bounded group filters and rejects invalid ones", async () => {
@@ -102,6 +101,7 @@ describe("dashboard read API", () => {
       aiInputTokensToday: number;
       linePushesMonth: number;
       lastSuccessfulCron: number | null;
+      platformMetrics: { source: string; dashboardUrl: string };
       warnings: string[];
     }>();
     expect(health).toEqual({
@@ -110,7 +110,54 @@ describe("dashboard read API", () => {
       aiInputTokensToday: 0,
       linePushesMonth: 0,
       lastSuccessfulCron: null,
+      platformMetrics: { source: "cloudflare_analytics", dashboardUrl: "https://dash.cloudflare.com/" },
       warnings: [],
     });
+  });
+
+  it("promotes deterministic open-alert severity ahead of a low AI score", async () => {
+    await env.DB.prepare(
+      `INSERT INTO groups(source_id,title,data_mode,active,priority_score,created_at,updated_at)
+       VALUES('C-alert-priority','กลุ่มด่วนจาก keyword','real',1,5,1,1)`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO alerts(group_id,kind,severity,status,excerpt,created_at)
+       VALUES('C-alert-priority','keyword','critical','open','ด่วนมาก',1)`,
+    ).run();
+
+    const dashboard = await (await get("/api/dashboard?mode=real")).json<{
+      kpis: { urgent: number };
+      categories: Array<{ urgentCount: number }>;
+      groups: Array<{ id: string; highestOpenAlertSeverity: string | null }>;
+      actionQueue: Array<{ groupId: string; highestOpenAlertSeverity: string | null }>;
+    }>();
+
+    expect(dashboard.kpis.urgent).toBe(1);
+    expect(dashboard.groups[0]).toMatchObject({
+      id: "C-alert-priority",
+      highestOpenAlertSeverity: "critical",
+    });
+    expect(dashboard.actionQueue[0]).toMatchObject({
+      groupId: "C-alert-priority",
+      highestOpenAlertSeverity: "critical",
+    });
+
+    await env.DB.prepare("UPDATE alerts SET status='acknowledged',acknowledged_at=2 WHERE group_id='C-alert-priority'")
+      .run();
+    const acknowledged = await (await get("/api/dashboard?mode=real")).json<{
+      kpis: { urgent: number };
+      groups: Array<{ openAlerts: number; highestOpenAlertSeverity: string | null }>;
+    }>();
+    expect(acknowledged.kpis.urgent).toBe(1);
+    expect(acknowledged.groups[0]).toMatchObject({ openAlerts: 1, highestOpenAlertSeverity: "critical" });
+
+    await env.DB.prepare("UPDATE alerts SET status='resolved',resolved_at=3 WHERE group_id='C-alert-priority'")
+      .run();
+    const resolved = await (await get("/api/dashboard?mode=real")).json<{
+      kpis: { urgent: number };
+      groups: Array<{ openAlerts: number; highestOpenAlertSeverity: string | null }>;
+    }>();
+    expect(resolved.kpis.urgent).toBe(0);
+    expect(resolved.groups[0]).toMatchObject({ openAlerts: 0, highestOpenAlertSeverity: null });
   });
 });

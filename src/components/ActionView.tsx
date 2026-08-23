@@ -1,4 +1,5 @@
 import type { ActionQueueItem, GroupSummary } from "../types";
+import { compareActionPriority, priorityLevel } from "../priority";
 
 export interface ActionRow extends ActionQueueItem {
   dataMode: "real" | "demo";
@@ -9,12 +10,6 @@ interface ActionViewProps {
   actions: ActionRow[];
   groups: GroupSummary[];
   onOpenGroup(groupId: string): void;
-}
-
-function severity(score: number) {
-  if (score >= 80) return { label: "เร่งด่วน", tone: "danger" };
-  if (score >= 60) return { label: "รอติดตาม", tone: "warning" };
-  return { label: "ปกติ", tone: "neutral" };
 }
 
 function ageLabel(timestamp: number | null): string {
@@ -40,11 +35,13 @@ export default function ActionView({ actions, groups, onOpenGroup }: ActionViewP
       actionItems: group.actionItems,
       unresolvedQuestions: group.unresolvedQuestions,
       openAlerts: group.openAlerts,
+      highestOpenAlertSeverity: group.highestOpenAlertSeverity,
+      oldestOpenAlertAt: group.oldestOpenAlertAt,
       lastActivityAt: group.lastMessageAt,
       dataMode: group.dataMode,
       categoryId: group.category?.id ?? null,
     })),
-  ];
+  ].sort(compareActionPriority);
 
   return (
     <section className="workspace-panel" aria-labelledby="action-view-title">
@@ -60,7 +57,7 @@ export default function ActionView({ actions, groups, onOpenGroup }: ActionViewP
       ) : (
         <div className="action-list">
           {rows.map((row) => {
-            const level = severity(row.priorityScore);
+            const level = priorityLevel(row.priorityScore, row.highestOpenAlertSeverity);
             const reason = row.openAlerts > 0
               ? `มี ${row.openAlerts} แจ้งเตือนที่ยังไม่ปิด`
               : row.summary ?? "ยังไม่มีสรุปล่าสุด";

@@ -79,7 +79,7 @@ npx wrangler secret put OPENROUTER_API_KEY --env production
 จากนั้นใน LINE Developers Console:
 
 1. เปิด “Allow bot to join group chats” เพราะค่าเริ่มต้นปิดอยู่
-2. กำหนด Webhook URL เป็น `https://<production-worker>.workers.dev/api/line/webhook`
+2. กำหนด Webhook URL เป็น `https://<production-worker>.workers.dev/api/line`
 3. กด Verify และยืนยันว่าได้ HTTP 200
 4. เปิด Use webhook
 5. ทดสอบเชิญบอทเข้ากลุ่มทดลองหนึ่งกลุ่ม ต้องมีข้อความเปิดเผยตัวหนึ่งครั้ง

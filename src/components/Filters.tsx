@@ -3,9 +3,10 @@ import type { CategorySummary } from "../types";
 export type ViewMode = "action" | "category";
 export type DashboardFilters = {
   query: string;
-  categoryId: number | "all";
+  categoryId: number | "all" | "review";
   priority: "all" | "urgent" | "waiting" | "normal";
   dataMode: "all" | "real" | "demo";
+  timeRange: "all" | "24h" | "7d" | "30d";
 };
 
 interface FiltersProps {
@@ -51,7 +52,7 @@ export default function Filters({ viewMode, filters, categories, onViewMode, onF
               type="search"
               value={filters.query}
               onChange={(event) => update("query", event.target.value)}
-              placeholder="ชื่อกลุ่มหรือสรุป"
+              placeholder="ชื่อกลุ่ม สรุป หรืองาน"
             />
           </span>
         </label>
@@ -59,9 +60,13 @@ export default function Filters({ viewMode, filters, categories, onViewMode, onF
           <span>หมวดหมู่</span>
           <select
             value={filters.categoryId}
-            onChange={(event) => update("categoryId", event.target.value === "all" ? "all" : Number(event.target.value))}
+            onChange={(event) => {
+              const value = event.target.value;
+              update("categoryId", value === "all" || value === "review" ? value : Number(value));
+            }}
           >
             <option value="all">ทุกหมวด</option>
+            <option value="review">รอยืนยันหมวด</option>
             {categories.map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}
           </select>
         </label>
@@ -80,6 +85,15 @@ export default function Filters({ viewMode, filters, categories, onViewMode, onF
             <option value="all">ทั้งหมด</option>
             <option value="real">กลุ่มจริง</option>
             <option value="demo">ข้อมูลจำลอง</option>
+          </select>
+        </label>
+        <label>
+          <span>ช่วงเวลา</span>
+          <select value={filters.timeRange} onChange={(event) => update("timeRange", event.target.value as DashboardFilters["timeRange"])}>
+            <option value="all">ทั้งหมด</option>
+            <option value="24h">24 ชั่วโมง</option>
+            <option value="7d">7 วัน</option>
+            <option value="30d">30 วัน</option>
           </select>
         </label>
       </div>

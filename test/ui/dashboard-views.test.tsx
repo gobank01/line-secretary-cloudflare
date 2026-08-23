@@ -27,6 +27,8 @@ const demoDashboard = {
       actionItems: ["โทรกลับลูกค้า"],
       unresolvedQuestions: [],
       openAlerts: 1,
+      highestOpenAlertSeverity: "high",
+      oldestOpenAlertAt: Date.now() - 12 * 60_000,
     },
     {
       id: "DEMO-002",
@@ -34,14 +36,16 @@ const demoDashboard = {
       dataMode: "demo",
       active: true,
       priorityScore: 22,
-      lastMessageAt: Date.now() - 50 * 60_000,
-      lastSummaryAt: Date.now(),
+      lastMessageAt: Date.now() - 40 * 86_400_000,
+      lastSummaryAt: Date.now() - 40 * 86_400_000,
       needsCategoryReview: true,
       category: { id: 2, slug: "team", name: "ทีมงาน", color: "#8b5cf6" },
       latestSummary: "ทีมคุยงานทั่วไป",
-      actionItems: [],
+      actionItems: ["วางแผนประชุมไตรมาส"],
       unresolvedQuestions: [],
-      openAlerts: 0,
+      openAlerts: 1,
+      highestOpenAlertSeverity: "critical",
+      oldestOpenAlertAt: Date.now() - 40 * 86_400_000,
     },
   ],
   actionQueue: [
@@ -55,6 +59,8 @@ const demoDashboard = {
       actionItems: ["โทรกลับลูกค้า"],
       unresolvedQuestions: [],
       openAlerts: 1,
+      highestOpenAlertSeverity: "high",
+      oldestOpenAlertAt: Date.now() - 12 * 60_000,
       lastActivityAt: Date.now() - 10 * 60_000,
     },
   ],
@@ -79,6 +85,8 @@ const realDashboard = {
       actionItems: ["ติดตามเอกสาร"],
       unresolvedQuestions: [],
       openAlerts: 0,
+      highestOpenAlertSeverity: null,
+      oldestOpenAlertAt: null,
     },
   ],
   actionQueue: [
@@ -92,6 +100,8 @@ const realDashboard = {
       actionItems: ["ติดตามเอกสาร"],
       unresolvedQuestions: [],
       openAlerts: 0,
+      highestOpenAlertSeverity: null,
+      oldestOpenAlertAt: null,
       lastActivityAt: Date.now() - 30 * 60_000,
     },
   ],
@@ -154,5 +164,42 @@ describe("shared Action and Category views", () => {
     await user.click(screen.getByRole("button", { name: "ตามหมวด" }));
     expect(screen.getByText("ลูกค้าจำลองเร่งด่วน")).toBeVisible();
     expect(screen.queryByText("ทีมจำลองรอยืนยัน")).not.toBeInTheDocument();
+  });
+
+  it("drills the review card into the shared category filter", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("button", { name: "ต้องจัดการ", pressed: true });
+
+    await user.click(screen.getByRole("button", { name: "ตามหมวด" }));
+    await user.click(screen.getByRole("button", { name: /รอยืนยันหมวด/ }));
+
+    expect(screen.getByLabelText("หมวดหมู่")).toHaveValue("review");
+    expect(screen.getByText("ทีมจำลองรอยืนยัน")).toBeVisible();
+    expect(screen.queryByText("ลูกค้าจำลองเร่งด่วน")).not.toBeInTheDocument();
+    expect(screen.queryByText("คู่ค้าจริงรอติดตาม")).not.toBeInTheDocument();
+  });
+
+  it("searches action items and applies the shared time-range filter", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("button", { name: "ต้องจัดการ", pressed: true });
+
+    await user.type(screen.getByLabelText("ค้นหากลุ่ม"), "วางแผนประชุม");
+    expect(screen.getByText("ทีมจำลองรอยืนยัน")).toBeVisible();
+    await user.clear(screen.getByLabelText("ค้นหากลุ่ม"));
+    await user.selectOptions(screen.getByLabelText("ช่วงเวลา"), "30d");
+
+    expect(screen.getByText("ลูกค้าจำลองเร่งด่วน")).toBeVisible();
+    expect(screen.queryByText("ทีมจำลองรอยืนยัน")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "ตามหมวด" }));
+    expect(screen.getByLabelText("ช่วงเวลา")).toHaveValue("30d");
+  });
+
+  it("shows alert severity ahead of the AI score", async () => {
+    render(<App />);
+    await screen.findByRole("button", { name: "ต้องจัดการ", pressed: true });
+
+    expect(screen.getByText("วิกฤต")).toBeVisible();
   });
 });

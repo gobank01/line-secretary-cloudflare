@@ -3,6 +3,8 @@ import { updateGroupTitle } from "../db/repositories";
 import { getGroupSummary } from "../line/client";
 import type { GroupSummarizerParams } from "../env";
 import { localDateTimeParts, runDigest, type DigestEnv } from "./digest";
+import { releaseGroupSummaryReservation } from "../workflows/group-summarizer";
+import { releaseAiCallSlot, reserveAiCallSlot } from "../ai/openrouter";
 
 interface WorkflowCreator {
   create(options: { id: string; params: GroupSummarizerParams }): Promise<unknown>;
@@ -44,17 +46,20 @@ export async function selectEligibleGroups(
     minimumMessages: 5,
     maximumWaitMinutes: 120,
   },
+  leaseNow = now,
 ): Promise<EligibleGroup[]> {
   const result = await db
     .prepare(
       `SELECT g.source_id,g.data_mode,count(m.id) AS new_messages,min(m.sent_at) AS oldest_message,
-       EXISTS(SELECT 1 FROM alerts a WHERE a.group_id=g.source_id AND a.status='open'
+       EXISTS(SELECT 1 FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved'
          AND a.severity IN ('high','critical')) AS has_urgent
        FROM groups g JOIN messages m ON m.group_id=g.source_id AND m.processed_at IS NULL
-       WHERE g.data_mode='real' AND g.active=1
+       WHERE g.data_mode='real' AND g.active=1 AND m.sent_at<=?
+       AND (g.summary_inflight_until IS NULL OR g.summary_inflight_until<=?)
        GROUP BY g.source_id,g.data_mode
        ORDER BY has_urgent DESC,oldest_message,g.source_id LIMIT 100`,
     )
+    .bind(now, leaseNow)
     .all<{
       source_id: string;
       data_mode: "real";
@@ -72,6 +77,24 @@ export async function selectEligibleGroups(
     }))
     .filter((group) => isAiEligible({ ...group, budgetAvailable }, thresholds))
     .slice(0, limit);
+}
+
+export async function reserveGroupSummary(
+  db: D1Database,
+  groupId: string,
+  scheduledFor: number,
+  acquiredAt: number,
+  leaseUntil: number,
+): Promise<boolean> {
+  const result = await db.prepare(
+    `UPDATE groups SET summary_inflight_for=?,summary_inflight_until=?
+     WHERE source_id=? AND data_mode='real' AND active=1
+       AND (summary_inflight_until IS NULL OR summary_inflight_until<=?)
+       AND EXISTS(SELECT 1 FROM messages WHERE group_id=? AND processed_at IS NULL AND sent_at<=?)`,
+  )
+    .bind(scheduledFor, leaseUntil, groupId, acquiredAt, groupId, scheduledFor)
+    .run();
+  return result.meta.changes === 1;
 }
 
 async function runMaintenanceOnce(db: D1Database, scheduledTime: number, timeZone: string): Promise<void> {
@@ -126,7 +149,9 @@ async function budgetAvailable(env: CoordinatorEnv, scheduledTime: number): Prom
 export async function runScheduled(env: CoordinatorEnv, scheduledTime: number) {
   const reservation = await env.DB.prepare(
     `INSERT INTO job_runs(scheduled_for,status,started_at) VALUES(?,'running',?)
-     ON CONFLICT(scheduled_for) DO NOTHING`,
+     ON CONFLICT(scheduled_for) DO UPDATE SET status='running',started_at=excluded.started_at,
+       completed_at=NULL,error=NULL
+     WHERE job_runs.status='failed'`,
   )
     .bind(scheduledTime, Date.now())
     .run();
@@ -134,29 +159,84 @@ export async function runScheduled(env: CoordinatorEnv, scheduledTime: number) {
   const jobRunId =
     (await env.DB.prepare("SELECT id FROM job_runs WHERE scheduled_for=?").bind(scheduledTime).first<number>("id")) ?? 0;
 
-  await runMaintenanceOnce(env.DB, scheduledTime, env.APP_TIMEZONE);
-  await refreshFallbackGroupNames(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN, scheduledTime);
-  const selected = await selectEligibleGroups(env.DB, scheduledTime, 10, await budgetAvailable(env, scheduledTime), {
-    minimumMessages: Number.parseInt(env.AI_MIN_MESSAGES, 10) || 5,
-    maximumWaitMinutes: Number.parseInt(env.AI_MAX_WAIT_MINUTES, 10) || 120,
-  });
-  for (const group of selected) {
-    await env.GROUP_SUMMARIZER.create({
-      id: `${group.groupId}:${scheduledTime}`,
-      params: { groupId: group.groupId, scheduledFor: scheduledTime, jobRunId },
-    });
-  }
+  try {
+    await runMaintenanceOnce(env.DB, scheduledTime, env.APP_TIMEZONE);
+    await refreshFallbackGroupNames(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN, scheduledTime);
+    const selected = await selectEligibleGroups(
+      env.DB,
+      scheduledTime,
+      10,
+      await budgetAvailable(env, scheduledTime),
+      {
+        minimumMessages: Number.parseInt(env.AI_MIN_MESSAGES, 10) || 5,
+        maximumWaitMinutes: Number.parseInt(env.AI_MAX_WAIT_MINUTES, 10) || 120,
+      },
+      Date.now(),
+    );
+    const aiDay = localDateTimeParts(scheduledTime, env.APP_TIMEZONE).day;
+    const aiCallCap = Number.parseInt(env.AI_DAILY_CALL_CAP, 10) || 0;
+    let dispatchedGroups = 0;
+    for (const group of selected) {
+      const acquiredAt = Date.now();
+      const workflowId = `${group.groupId}:${scheduledTime}`;
+      const aiReservationId = crypto.randomUUID();
+      const reserved = await reserveGroupSummary(
+        env.DB,
+        group.groupId,
+        scheduledTime,
+        acquiredAt,
+        acquiredAt + 45 * 60_000,
+      );
+      if (!reserved) continue;
+      const callReserved = await reserveAiCallSlot(
+        env.DB,
+        aiReservationId,
+        workflowId,
+        aiDay,
+        aiCallCap,
+        acquiredAt,
+      );
+      if (!callReserved) {
+        await releaseGroupSummaryReservation(env.DB, group.groupId, scheduledTime);
+        break;
+      }
+      try {
+        await env.GROUP_SUMMARIZER.create({
+          id: workflowId,
+          params: {
+            groupId: group.groupId,
+            scheduledFor: scheduledTime,
+            jobRunId,
+            aiReservationId,
+            aiReservationDay: aiDay,
+          },
+        });
+        dispatchedGroups += 1;
+      } catch (error) {
+        await Promise.all([
+          releaseGroupSummaryReservation(env.DB, group.groupId, scheduledTime),
+          releaseAiCallSlot(env.DB, aiReservationId, aiDay, Date.now()),
+        ]);
+        throw error;
+      }
+    }
 
-  let digestStatus: string | undefined;
-  if (isDigestSlot(scheduledTime)) digestStatus = (await runDigest(env, scheduledTime)).status;
-  await env.DB.prepare(
-    "UPDATE job_runs SET status='dispatched',groups_selected=?,completed_at=? WHERE id=?",
-  )
-    .bind(selected.length, Date.now(), jobRunId)
-    .run();
-  return {
-    status: "dispatched" as const,
-    groups: selected.length,
-    ...(digestStatus ? { digestStatus } : {}),
-  };
+    let digestStatus: string | undefined;
+    if (isDigestSlot(scheduledTime)) digestStatus = (await runDigest(env, scheduledTime)).status;
+    await env.DB.prepare(
+      "UPDATE job_runs SET status='dispatched',groups_selected=?,completed_at=? WHERE id=?",
+    )
+      .bind(dispatchedGroups, Date.now(), jobRunId)
+      .run();
+    return {
+      status: "dispatched" as const,
+      groups: dispatchedGroups,
+      ...(digestStatus ? { digestStatus } : {}),
+    };
+  } catch (error) {
+    await env.DB.prepare("UPDATE job_runs SET status='failed',error=?,completed_at=? WHERE id=?")
+      .bind(error instanceof Error ? error.name : "UnknownError", Date.now(), jobRunId)
+      .run();
+    throw error;
+  }
 }

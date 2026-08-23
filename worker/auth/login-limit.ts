@@ -27,26 +27,31 @@ export async function isLoginBlocked(db: D1Database, ipHash: string, now: number
   return row?.blocked_until !== null && row?.blocked_until !== undefined && row.blocked_until > now;
 }
 
-export async function recordLoginFailure(db: D1Database, ipHash: string, now: number): Promise<void> {
+export async function recordLoginFailure(
+  db: D1Database,
+  ipHash: string,
+  now: number,
+): Promise<{ attempts: number; blockedUntil: number | null }> {
   const row = await db
-    .prepare("SELECT window_start, attempts, blocked_until FROM auth_attempts WHERE ip_hash = ?")
-    .bind(ipHash)
-    .first<AttemptRow>();
-  const inWindow = row !== null && now - row.window_start < WINDOW_MS;
-  const attempts = inWindow ? row.attempts + 1 : 1;
-  const windowStart = inWindow ? row.window_start : now;
-  const blockedUntil = attempts >= 5 ? now + WINDOW_MS : null;
-
-  await db
     .prepare(
-      `INSERT INTO auth_attempts(ip_hash,window_start,attempts,blocked_until) VALUES(?,?,?,?)
+      `INSERT INTO auth_attempts(ip_hash,window_start,attempts,blocked_until) VALUES(?,?,1,NULL)
        ON CONFLICT(ip_hash) DO UPDATE SET
-         window_start=excluded.window_start,
-         attempts=excluded.attempts,
-         blocked_until=excluded.blocked_until`,
+         window_start=CASE
+           WHEN excluded.window_start-auth_attempts.window_start>=? THEN excluded.window_start
+           ELSE auth_attempts.window_start END,
+         attempts=CASE
+           WHEN excluded.window_start-auth_attempts.window_start>=? THEN 1
+           ELSE auth_attempts.attempts+1 END,
+         blocked_until=CASE
+           WHEN excluded.window_start-auth_attempts.window_start>=? THEN NULL
+           WHEN auth_attempts.attempts+1>=5 THEN excluded.window_start+?
+           ELSE auth_attempts.blocked_until END
+       RETURNING attempts,blocked_until`,
     )
-    .bind(ipHash, windowStart, attempts, blockedUntil)
-    .run();
+    .bind(ipHash, now, WINDOW_MS, WINDOW_MS, WINDOW_MS, WINDOW_MS)
+    .first<{ attempts: number; blocked_until: number | null }>();
+  if (!row) throw new Error("Failed to record login attempt");
+  return { attempts: row.attempts, blockedUntil: row.blocked_until };
 }
 
 export function clearLoginFailures(db: D1Database, ipHash: string): Promise<D1Result> {

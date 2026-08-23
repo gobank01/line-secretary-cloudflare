@@ -6,6 +6,7 @@ import CategoryView, { type FilteredCategory } from "./CategoryView";
 import Filters, { type DashboardFilters, type ViewMode } from "./Filters";
 import GroupDetail from "./GroupDetail";
 import SystemStatus from "./SystemStatus";
+import { compareActionPriority, isUrgent, isWaiting } from "../priority";
 
 interface DashboardProps {
   onUnauthorized(): void;
@@ -32,6 +33,7 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     categoryId: "all",
     priority: "all",
     dataMode: "all",
+    timeRange: "all",
   });
   const [focusedGroupId, setFocusedGroupId] = useState<string | null>(() =>
     new URLSearchParams(window.location.search).get("group"),
@@ -62,7 +64,10 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
       if (document.hidden || !navigator.onLine) return;
       try {
         const result = await getAlertsSince(alertCursor.current);
-        for (const alert of result.alerts) alertCursor.current = Math.max(alertCursor.current, alert.createdAt);
+        let nextCursor = alertCursor.current;
+        for (const alert of result.alerts) nextCursor = Math.max(nextCursor, alert.createdAt);
+        if (result.alerts.length > 0) setData(await getDashboard("all"));
+        alertCursor.current = nextCursor;
         setPollError(false);
       } catch (error) {
         if (error instanceof ApiError && error.status === 401) onUnauthorized();
@@ -134,11 +139,21 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     const query = filters.query.trim().toLocaleLowerCase("th");
     return data.groups.filter((group) => {
       if (filters.dataMode !== "all" && group.dataMode !== filters.dataMode) return false;
-      if (filters.categoryId !== "all" && group.category?.id !== filters.categoryId) return false;
-      if (filters.priority === "urgent" && group.priorityScore < 80) return false;
-      if (filters.priority === "waiting" && (group.priorityScore < 60 || group.priorityScore >= 80)) return false;
-      if (filters.priority === "normal" && group.priorityScore >= 60) return false;
-      if (query && !`${group.title} ${group.latestSummary ?? ""}`.toLocaleLowerCase("th").includes(query)) return false;
+      if (filters.categoryId === "review" && !group.needsCategoryReview) return false;
+      if (typeof filters.categoryId === "number" && group.category?.id !== filters.categoryId) return false;
+      const urgent = isUrgent(group.priorityScore, group.highestOpenAlertSeverity);
+      const waiting = isWaiting(group.priorityScore, group.highestOpenAlertSeverity);
+      if (filters.priority === "urgent" && !urgent) return false;
+      if (filters.priority === "waiting" && !waiting) return false;
+      if (filters.priority === "normal" && (urgent || waiting)) return false;
+      const activityAt = Math.max(group.lastMessageAt ?? 0, group.lastSummaryAt ?? 0);
+      const rangeDays = filters.timeRange === "24h" ? 1 : filters.timeRange === "7d" ? 7 : filters.timeRange === "30d" ? 30 : null;
+      if (rangeDays !== null && activityAt < data.generatedAt - rangeDays * 86_400_000) return false;
+      const searchable = [group.title, group.latestSummary, ...group.actionItems, ...group.unresolvedQuestions]
+        .filter((value): value is string => typeof value === "string")
+        .join(" ")
+        .toLocaleLowerCase("th");
+      if (query && !searchable.includes(query)) return false;
       return true;
     });
   }, [data, filters]);
@@ -153,12 +168,7 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
           ? [{ ...action, dataMode: group.dataMode, categoryId: group.category?.id ?? null }]
           : [];
       })
-      .sort(
-        (left, right) =>
-          right.priorityScore - left.priorityScore ||
-          right.openAlerts - left.openAlerts ||
-          (left.lastActivityAt ?? 0) - (right.lastActivityAt ?? 0),
-      );
+      .sort(compareActionPriority);
   }, [data, filteredGroups]);
 
   const filteredCategories = useMemo<FilteredCategory[]>(() => {
@@ -175,7 +185,7 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
       return [{
         ...category,
         groupCount: groups.length,
-        urgentCount: groups.filter((group) => group.priorityScore >= 80).length,
+        urgentCount: groups.filter((group) => isUrgent(group.priorityScore, group.highestOpenAlertSeverity)).length,
         openActionCount: groups.filter((group) => group.openAlerts > 0 || group.actionItems.length > 0).length,
         mostRecentAt,
       }];
@@ -184,10 +194,10 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
 
   const filteredKpis = useMemo(
     () => ({
-      urgent: filteredGroups.filter((group) => group.priorityScore >= 80).length,
-      waiting: filteredGroups.filter((group) => group.priorityScore >= 60 && group.priorityScore < 80).length,
-      active: filteredGroups.filter((group) => group.priorityScore >= 30 && group.priorityScore < 60).length,
-      normal: filteredGroups.filter((group) => group.priorityScore < 30).length,
+      urgent: filteredGroups.filter((group) => isUrgent(group.priorityScore, group.highestOpenAlertSeverity)).length,
+      waiting: filteredGroups.filter((group) => isWaiting(group.priorityScore, group.highestOpenAlertSeverity)).length,
+      active: filteredGroups.filter((group) => !isUrgent(group.priorityScore, group.highestOpenAlertSeverity) && !isWaiting(group.priorityScore, group.highestOpenAlertSeverity) && group.priorityScore >= 30).length,
+      normal: filteredGroups.filter((group) => !isUrgent(group.priorityScore, group.highestOpenAlertSeverity) && !isWaiting(group.priorityScore, group.highestOpenAlertSeverity) && group.priorityScore < 30).length,
     }),
     [filteredGroups],
   );
@@ -195,7 +205,8 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     filters.query.trim() !== "" ||
     filters.categoryId !== "all" ||
     filters.priority !== "all" ||
-    filters.dataMode !== "all";
+    filters.dataMode !== "all" ||
+    filters.timeRange !== "all";
   const useServerAggregate = !hasActiveFilters && data !== null && data.groups.length === 0;
   const displayedKpis = useServerAggregate ? data.kpis : filteredKpis;
   const displayedTotal = useServerAggregate ? data.kpis.totalGroups : filteredGroups.length;
@@ -288,8 +299,7 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
             groups={filteredGroups}
             reviewCount={filteredGroups.filter((group) => group.needsCategoryReview).length}
             onCategory={(category) => {
-              if (category === "review") setFilters((current) => ({ ...current, categoryId: "all" }));
-              else setFilters((current) => ({ ...current, categoryId: category }));
+              setFilters((current) => ({ ...current, categoryId: category }));
             }}
             onOpenGroup={openGroup}
           />

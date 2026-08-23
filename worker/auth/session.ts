@@ -3,6 +3,8 @@ import type { AppEnv } from "../env";
 
 const encoder = new TextEncoder();
 const SESSION_SECONDS = 12 * 60 * 60;
+const MIN_PASSWORD_LENGTH = 12;
+const MIN_SESSION_SECRET_LENGTH = 32;
 
 function base64UrlEncode(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
@@ -32,7 +34,19 @@ function constantWorkEqual(expected: Uint8Array, actual: Uint8Array): boolean {
   return difference === 0;
 }
 
-export async function createSession(secret: string, now: number): Promise<string> {
+export function authConfigurationValid(password: string | undefined, secret: string | undefined): boolean {
+  return (
+    typeof password === "string" &&
+    password.length >= MIN_PASSWORD_LENGTH &&
+    typeof secret === "string" &&
+    secret.length >= MIN_SESSION_SECRET_LENGTH
+  );
+}
+
+export async function createSession(secret: string | undefined, now: number): Promise<string> {
+  if (typeof secret !== "string" || secret.length < MIN_SESSION_SECRET_LENGTH) {
+    throw new Error("SESSION_SECRET is not configured securely");
+  }
   const payload = base64UrlEncode(
     encoder.encode(JSON.stringify({ sub: "owner", exp: Math.floor(now / 1_000) + SESSION_SECONDS })),
   );
@@ -40,8 +54,9 @@ export async function createSession(secret: string, now: number): Promise<string
   return `${payload}.${signature}`;
 }
 
-export async function verifySession(cookie: string, secret: string, now: number): Promise<boolean> {
+export async function verifySession(cookie: string, secret: string | undefined, now: number): Promise<boolean> {
   try {
+    if (typeof secret !== "string" || secret.length < MIN_SESSION_SECRET_LENGTH) return false;
     const parts = cookie.split(".");
     if (parts.length !== 2 || !parts[0] || !parts[1]) return false;
 
@@ -102,7 +117,8 @@ export const requireMutationOrigin: MiddlewareHandler<{ Bindings: AppEnv }> = as
   await next();
 };
 
-export async function passwordMatches(candidate: string, configured: string): Promise<boolean> {
+export async function passwordMatches(candidate: string, configured: string | undefined): Promise<boolean> {
+  if (candidate.length === 0 || typeof configured !== "string" || configured.length < MIN_PASSWORD_LENGTH) return false;
   const [candidateDigest, configuredDigest] = await Promise.all([
     crypto.subtle.digest("SHA-256", encoder.encode(candidate)),
     crypto.subtle.digest("SHA-256", encoder.encode(configured)),

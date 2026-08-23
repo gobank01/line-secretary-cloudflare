@@ -26,6 +26,8 @@ let detail = {
     actionItems: ["ส่งราคาใหม่"],
     unresolvedQuestions: ["ใครเป็นผู้อนุมัติ?"],
     openAlerts: 1,
+    highestOpenAlertSeverity: "high" as const,
+    oldestOpenAlertAt: Date.now(),
   },
   messageCount: 14,
   reports: [
@@ -84,8 +86,9 @@ beforeEach(() => {
       return Response.json({ deletedMessages: 14 });
     }
     if (url === "/api/alerts/9" && method === "PATCH") {
-      detail.alerts[0]!.status = "acknowledged";
-      return Response.json({ id: 9, status: "acknowledged" });
+      const status = (JSON.parse(String(init?.body)) as { status: "acknowledged" | "resolved" }).status;
+      detail.alerts[0]!.status = status;
+      return Response.json({ id: 9, status });
     }
     if (url === "/api/categories" && method === "POST") return Response.json({ id: 3 }, { status: 201 });
     if (url.startsWith("/api/categories/") && method === "PATCH") return Response.json({ ok: true });
@@ -132,6 +135,23 @@ describe("group detail and guarded controls", () => {
 
     await user.click(screen.getByRole("button", { name: "รับทราบ" }));
     expect(calls).toContainEqual(expect.objectContaining({ url: "/api/alerts/9", method: "PATCH" }));
+  });
+
+  it("can resolve an alert directly from group detail", async () => {
+    const user = userEvent.setup();
+    detail.alerts[0]!.status = "open";
+    detail.alerts[0]!.acknowledgedAt = null;
+    detail.alerts[0]!.resolvedAt = null;
+    render(<GroupDetail groupId="DEMO-001" categories={categories} onClose={() => undefined} onChanged={() => undefined} />);
+    await screen.findByText("ด่วน ลูกค้าขอคำตอบวันนี้");
+
+    await user.click(screen.getByRole("button", { name: "ปิดเรื่อง" }));
+
+    expect(calls).toContainEqual(expect.objectContaining({
+      url: "/api/alerts/9",
+      body: JSON.stringify({ status: "resolved" }),
+    }));
+    expect(await screen.findByText("ปิดแล้ว")).toBeVisible();
   });
 
   it("names the group in pause and destructive-history confirmations", async () => {

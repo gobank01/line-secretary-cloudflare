@@ -11,6 +11,7 @@ export interface GroupSummaryInput {
   groupId: string;
   title: string;
   categorySlugs: string[];
+  previousSummary: string | null;
   messages: WorkflowMessageInput[];
 }
 
@@ -34,6 +35,11 @@ export class AiBudgetExceededError extends Error {
     super("Daily AI budget is exhausted");
     this.name = "AiBudgetExceededError";
   }
+}
+
+export interface AiCallReservation {
+  id: string;
+  day: string;
 }
 
 function localDay(now: number, timeZone: string): string {
@@ -68,7 +74,72 @@ export async function reserveAiBudget(
     )
     .bind(day, estimatedInputTokens, now, callCap, inputTokenCap)
     .run();
-  return result.meta.changes === 1;
+  return result.meta.changes > 0;
+}
+
+export async function reserveAiCallSlot(
+  db: D1Database,
+  reservationId: string,
+  workflowId: string,
+  day: string,
+  callCap: number,
+  now: number,
+): Promise<boolean> {
+  if (callCap < 1) return false;
+  const result = await db.prepare(
+    `INSERT INTO ai_call_reservations(id,workflow_id,day,status,created_at)
+     SELECT ?,?,?,'reserved',?
+     WHERE COALESCE((SELECT ai_calls FROM usage_daily WHERE day=?),0)<?
+     ON CONFLICT(id) DO NOTHING`,
+  )
+    .bind(reservationId, workflowId, day, now, day, callCap)
+    .run();
+  return result.meta.changes > 0;
+}
+
+export async function releaseAiCallSlot(
+  db: D1Database,
+  reservationId: string,
+  day: string,
+  now: number,
+): Promise<void> {
+  await db.prepare(
+    `UPDATE ai_call_reservations SET status='released',released_at=?
+     WHERE id=? AND day=? AND status='reserved'`,
+  )
+    .bind(now, reservationId, day)
+    .run();
+}
+
+async function beginAiCallAttempt(
+  db: D1Database,
+  reservation: AiCallReservation,
+  estimatedInputTokens: number,
+  callCap: number,
+  inputTokenCap: number,
+  now: number,
+): Promise<boolean> {
+  if (callCap < 1 || estimatedInputTokens < 1 || estimatedInputTokens > inputTokenCap) return false;
+  const result = await db.prepare(
+    `UPDATE ai_call_reservations
+     SET status='consumed',estimated_input_tokens=?,attempt_count=attempt_count+1,consumed_at=?
+     WHERE id=? AND day=? AND status IN ('reserved','consumed')
+       AND COALESCE((SELECT ai_input_tokens FROM usage_daily WHERE day=?),0)+?<=?
+       AND (attempt_count=0 OR COALESCE((SELECT ai_calls FROM usage_daily WHERE day=?),0)<?)`,
+  )
+    .bind(
+      estimatedInputTokens,
+      now,
+      reservation.id,
+      reservation.day,
+      reservation.day,
+      estimatedInputTokens,
+      inputTokenCap,
+      reservation.day,
+      callCap,
+    )
+    .run();
+  return result.meta.changes > 0;
 }
 
 async function reconcileAiUsage(
@@ -118,23 +189,45 @@ export async function summarizeGroup(
   env: SummarizeEnv,
   input: GroupSummaryInput,
   now = Date.now(),
+  callReservation?: AiCallReservation,
 ): Promise<{ output: SummaryOutputValue; promptTokens: number; completionTokens: number; model: string }> {
   const systemPrompt = buildSummarySystemPrompt(input.categorySlugs);
   const userPayload = JSON.stringify({
     group: { id: input.groupId, title: input.title },
+    previousSummary: input.previousSummary,
     messages: input.messages.map((message) => ({ sentAt: message.sentAt, text: message.text })),
   });
-  const estimatedInputTokens = estimateInputTokens(systemPrompt.length + userPayload.length);
-  const day = localDay(now, env.APP_TIMEZONE);
-  const reserved = await reserveAiBudget(
-    env.DB,
-    day,
-    estimatedInputTokens,
-    Number.parseInt(env.AI_DAILY_CALL_CAP, 10) || 0,
-    Number.parseInt(env.AI_DAILY_INPUT_TOKEN_CAP, 10) || 0,
-    now,
-  );
-  if (!reserved) throw new AiBudgetExceededError();
+  const requestBody = {
+    model: env.OPENROUTER_MODEL,
+    temperature: 0.1,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPayload },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: "group_summary", strict: true, schema: OUTPUT_JSON_SCHEMA },
+    },
+  };
+  const serializedRequest = JSON.stringify(requestBody);
+  const estimatedInputTokens = estimateInputTokens(serializedRequest) + 512;
+  const day = callReservation?.day ?? localDay(now, env.APP_TIMEZONE);
+  const inputTokenCap = Number.parseInt(env.AI_DAILY_INPUT_TOKEN_CAP, 10) || 0;
+  const callCap = Number.parseInt(env.AI_DAILY_CALL_CAP, 10) || 0;
+  const reserved = callReservation
+    ? await beginAiCallAttempt(env.DB, callReservation, estimatedInputTokens, callCap, inputTokenCap, now)
+    : await reserveAiBudget(
+      env.DB,
+      day,
+      estimatedInputTokens,
+      callCap,
+      inputTokenCap,
+      now,
+    );
+  if (!reserved) {
+    if (callReservation) await releaseAiCallSlot(env.DB, callReservation.id, callReservation.day, now);
+    throw new AiBudgetExceededError();
+  }
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -144,18 +237,7 @@ export async function summarizeGroup(
       "http-referer": env.DASHBOARD_URL,
       "x-title": "LINE Secretary Cloudflare",
     },
-    body: JSON.stringify({
-      model: env.OPENROUTER_MODEL,
-      temperature: 0.1,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPayload },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: "group_summary", strict: true, schema: OUTPUT_JSON_SCHEMA },
-      },
-    }),
+    body: serializedRequest,
     signal: AbortSignal.timeout(25_000),
   });
   if (!response.ok) throw new Error(`OpenRouter request failed with ${response.status}`);

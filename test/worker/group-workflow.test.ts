@@ -6,17 +6,22 @@ import {
   runGroupSummarizerSteps,
   type WorkflowStepRunner,
 } from "../../worker/workflows/group-summarizer";
+import { reserveAiCallSlot } from "../../worker/ai/openrouter";
 
 const now = Date.UTC(2026, 7, 23, 12, 0, 0);
+const reservationDay = "2026-08-23";
+const reservationId = "ai-reservation-workflow";
 let teamCategoryId = 0;
+let jobRunId = 0;
 
 async function seedLockedGroup(): Promise<void> {
   teamCategoryId = (await env.DB.prepare("SELECT id FROM categories WHERE slug='team'").first<number>("id")) ?? 0;
   await env.DB.prepare(
-    `INSERT INTO groups(source_id,title,data_mode,active,category_id,category_source,category_locked,created_at,updated_at)
-     VALUES('C-workflow','ทีมโครงการ','real',1,?,'manual',1,?,?)`,
+    `INSERT INTO groups(source_id,title,data_mode,active,category_id,category_source,category_locked,
+     summary_inflight_for,summary_inflight_until,created_at,updated_at)
+     VALUES('C-workflow','ทีมโครงการ','real',1,?,'manual',1,?,?,?,?)`,
   )
-    .bind(teamCategoryId, now, now)
+    .bind(teamCategoryId, now, now + 45 * 60_000, now, now)
     .run();
   await env.DB.batch([
     env.DB.prepare(
@@ -31,6 +36,8 @@ async function seedLockedGroup(): Promise<void> {
       `INSERT INTO job_runs(scheduled_for,status,started_at) VALUES(?,'running',?)`,
     ).bind(now, now),
   ]);
+  await reserveAiCallSlot(env.DB, reservationId, "C-workflow:scheduled", reservationDay, 120, now);
+  jobRunId = (await env.DB.prepare("SELECT id FROM job_runs WHERE scheduled_for=?").bind(now).first<number>("id")) ?? 0;
 }
 
 beforeEach(async () => {
@@ -41,6 +48,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM messages"),
     env.DB.prepare("DELETE FROM groups"),
     env.DB.prepare("DELETE FROM job_runs"),
+    env.DB.prepare("DELETE FROM ai_call_reservations"),
     env.DB.prepare("DELETE FROM usage_daily"),
   ]);
   await seedLockedGroup();
@@ -68,6 +76,52 @@ function validOpenRouterResponse(): Response {
 }
 
 describe("group summarizer Workflow", () => {
+  it("loads the previous report as bounded rolling context", async () => {
+    await env.DB.prepare(
+      `INSERT INTO reports(group_id,period_start,period_end,summary,action_items_json,unresolved_json,
+       priority_score,model,prompt_version,created_at) VALUES('C-workflow',1,2,'สรุปรอบก่อน','[]','[]',20,'test','v1',?)`,
+    )
+      .bind(now - 10_000)
+      .run();
+
+    const input = await loadWorkflowInput(env.DB, "C-workflow", 200);
+
+    expect(input).not.toBeNull();
+    expect((input as unknown as { previousSummary?: string | null })?.previousSummary).toBe("สรุปรอบก่อน");
+  });
+
+  it("pins input to the scheduled cutoff and keeps the persisted step well below one MiB", async () => {
+    await env.DB.prepare(
+      `INSERT INTO messages(line_message_id,group_id,kind,text,sent_at,ingested_at,retention_expires_at)
+       VALUES('mw-future','C-workflow','text','ข้อความหลัง cutoff',?,?,?)`,
+    )
+      .bind(now + 1, now + 1, now + 99_999)
+      .run();
+    await env.DB.batch(
+      Array.from({ length: 100 }, (_, index) =>
+        env.DB.prepare(
+          `INSERT INTO messages(line_message_id,group_id,kind,text,sent_at,ingested_at,retention_expires_at)
+           VALUES(?,'C-workflow','text',?,?,?,?)`,
+        ).bind(`mw-large-${index}`, "ก".repeat(5_000), now - 500 + index, now, now + 99_999),
+      ),
+    );
+    await env.DB.batch(
+      Array.from({ length: 60 }, (_, index) =>
+        env.DB.prepare(
+          `INSERT INTO messages(line_message_id,group_id,kind,text,sent_at,ingested_at,retention_expires_at)
+           VALUES(?,'C-workflow','text',?,?,?,?)`,
+        ).bind(`mw-escaped-${index}`, "\u0000".repeat(5_000), now - 2_000 + index, now, now + 99_999),
+      ),
+    );
+
+    const input = await loadWorkflowInput(env.DB, "C-workflow", 200, false, now);
+    const bytes = new TextEncoder().encode(JSON.stringify(input)).byteLength;
+
+    expect(input?.messages.some((message) => message.text === "ข้อความหลัง cutoff")).toBe(false);
+    expect(input?.messages.length).toBeLessThan(102);
+    expect(bytes).toBeLessThan(256 * 1_024);
+  });
+
   it("uses stable retryable steps and persists one idempotent report while preserving a locked category", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(validOpenRouterResponse());
     const observed: Array<{ name: string; config?: unknown }> = [];
@@ -82,7 +136,7 @@ describe("group summarizer Workflow", () => {
 
     await runGroupSummarizerSteps(
       env,
-      { groupId: "C-workflow", scheduledFor: now, jobRunId: 1 },
+      { groupId: "C-workflow", scheduledFor: now, jobRunId, aiReservationId: reservationId, aiReservationDay: reservationDay },
       step,
       now,
     );
@@ -109,8 +163,8 @@ describe("group summarizer Workflow", () => {
       model: env.OPENROUTER_MODEL,
     };
     if (reportInput) {
-      await persistWorkflowResult(env.DB, reportInput, result, now, 1);
-      await persistWorkflowResult(env.DB, reportInput, result, now, 1);
+      await persistWorkflowResult(env.DB, reportInput, result, now, jobRunId);
+      await persistWorkflowResult(env.DB, reportInput, result, now, jobRunId);
     }
 
     expect(await env.DB.prepare("SELECT count(*) AS count FROM reports WHERE group_id='C-workflow'").first("count")).toBe(1);
@@ -120,7 +174,13 @@ describe("group summarizer Workflow", () => {
     expect(group?.category_id).toBe(teamCategoryId);
     expect(group?.category_locked).toBe(1);
     expect(group?.priority_score).toBe(88);
-    expect(await env.DB.prepare("SELECT groups_completed FROM job_runs WHERE id=1").first("groups_completed")).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT summary_inflight_for FROM groups WHERE source_id='C-workflow'")
+        .first("summary_inflight_for"),
+    ).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT groups_completed FROM job_runs WHERE id=?").bind(jobRunId).first("groups_completed"),
+    ).toBe(1);
   });
 
   it("leaves messages unprocessed when structured output is invalid", async () => {
@@ -139,12 +199,70 @@ describe("group summarizer Workflow", () => {
     };
 
     await expect(
-      runGroupSummarizerSteps(env, { groupId: "C-workflow", scheduledFor: now, jobRunId: 1 }, step, now),
+      runGroupSummarizerSteps(
+        env,
+        { groupId: "C-workflow", scheduledFor: now, jobRunId, aiReservationId: reservationId, aiReservationDay: reservationDay },
+        step,
+        now,
+      ),
     ).rejects.toThrow();
     expect(
       await env.DB.prepare("SELECT count(*) AS count FROM messages WHERE group_id='C-workflow' AND processed_at IS NULL")
         .first("count"),
     ).toBe(2);
     expect(await env.DB.prepare("SELECT count(*) AS count FROM reports WHERE group_id='C-workflow'").first("count")).toBe(0);
+  });
+
+  it("consumes the named reservation on its original day when execution crosses midnight", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(validOpenRouterResponse());
+    const step: WorkflowStepRunner = {
+      async do<T>(_name: string, configOrCallback: unknown, maybeCallback?: () => Promise<T>): Promise<T> {
+        const callback = typeof configOrCallback === "function" ? (configOrCallback as () => Promise<T>) : maybeCallback;
+        if (!callback) throw new Error("missing callback");
+        return callback();
+      },
+    };
+
+    await runGroupSummarizerSteps(
+      env,
+      { groupId: "C-workflow", scheduledFor: now, jobRunId, aiReservationId: reservationId, aiReservationDay: reservationDay },
+      step,
+      Date.UTC(2026, 7, 24, 1),
+    );
+
+    expect(await env.DB.prepare("SELECT status FROM ai_call_reservations WHERE id=?").bind(reservationId).first("status"))
+      .toBe("consumed");
+    expect(await env.DB.prepare("SELECT ai_calls FROM usage_daily WHERE day=?").bind(reservationDay).first("ai_calls"))
+      .toBe(1);
+    expect(await env.DB.prepare("SELECT ai_calls FROM usage_daily WHERE day='2026-08-24'").first("ai_calls"))
+      .toBeNull();
+  });
+
+  it("releases an empty reservation idempotently without decrementing another workflow", async () => {
+    await reserveAiCallSlot(env.DB, "ai-reservation-other", "other:scheduled", reservationDay, 120, now);
+    const step: WorkflowStepRunner = {
+      async do<T>(_name: string, configOrCallback: unknown, maybeCallback?: () => Promise<T>): Promise<T> {
+        const callback = typeof configOrCallback === "function" ? (configOrCallback as () => Promise<T>) : maybeCallback;
+        if (!callback) throw new Error("missing callback");
+        return callback();
+      },
+    };
+    const payload = {
+      groupId: "C-missing",
+      scheduledFor: now,
+      jobRunId,
+      aiReservationId: reservationId,
+      aiReservationDay: reservationDay,
+    };
+
+    await expect(runGroupSummarizerSteps(env, payload, step, now)).resolves.toEqual({ status: "empty" });
+    await expect(runGroupSummarizerSteps(env, payload, step, now)).resolves.toEqual({ status: "empty" });
+
+    expect(await env.DB.prepare("SELECT status FROM ai_call_reservations WHERE id=?").bind(reservationId).first("status"))
+      .toBe("released");
+    expect(await env.DB.prepare("SELECT status FROM ai_call_reservations WHERE id='ai-reservation-other'").first("status"))
+      .toBe("reserved");
+    expect(await env.DB.prepare("SELECT ai_calls FROM usage_daily WHERE day=?").bind(reservationDay).first("ai_calls"))
+      .toBe(1);
   });
 });

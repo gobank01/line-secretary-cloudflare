@@ -46,6 +46,10 @@ describe("resilient dashboard shell", () => {
     expect(await screen.findByText("อัปเดตล่าสุด")).toBeVisible();
     expect(screen.getByText("AI วันนี้ 18 ครั้ง · 1,200 tokens")).toBeVisible();
     expect(screen.getByText("LINE เดือนนี้ 42 / 280")).toBeVisible();
+    expect(screen.getByRole("link", { name: "เปิด Cloudflare Analytics" })).toHaveAttribute(
+      "href",
+      "https://dash.cloudflare.com/",
+    );
   });
 
   it("retains cached data and shows a stale banner when alert polling fails", async () => {
@@ -64,6 +68,31 @@ describe("resilient dashboard shell", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("ข้อมูลเดิมยังแสดงอยู่");
     expect(screen.getByText("ติดตาม 100 กลุ่ม")).toBeVisible();
+  });
+
+  it("refreshes the dashboard when lightweight polling finds a new alert", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const refreshedDashboard = {
+      ...dashboard,
+      kpis: { ...dashboard.kpis, urgent: 9 },
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json({ authenticated: true }))
+      .mockResolvedValueOnce(json(dashboard))
+      .mockResolvedValueOnce(json(emptyDashboard))
+      .mockResolvedValueOnce(json({
+        alerts: [{ id: 1, groupId: "C-urgent", groupTitle: "กลุ่มด่วน", createdAt: Date.now() }],
+      }))
+      .mockResolvedValueOnce(json(refreshedDashboard))
+      .mockResolvedValueOnce(json(emptyDashboard));
+    render(<App />);
+    expect(await screen.findByText("ติดตาม 100 กลุ่ม")).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(screen.getByLabelText("ตัวเลขภาพรวม").querySelector(".kpi-card--danger strong")).toHaveTextContent("9");
   });
 
   it("keeps cached data visible while the browser is offline", async () => {

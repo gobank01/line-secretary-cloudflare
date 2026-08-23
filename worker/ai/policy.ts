@@ -20,6 +20,8 @@ export function isAiEligible(
   );
 }
 
-export function estimateInputTokens(characters: number): number {
-  return Math.max(1, Math.ceil(Math.max(0, characters) / 4));
+export function estimateInputTokens(text: string): number {
+  // UTF-8 bytes are a deliberately conservative upper bound for byte-fallback tokenizers,
+  // including Thai text where a characters/4 estimate can severely under-reserve.
+  return Math.max(1, new TextEncoder().encode(text).byteLength);
 }

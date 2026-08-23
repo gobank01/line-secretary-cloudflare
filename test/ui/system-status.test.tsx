@@ -15,6 +15,7 @@ describe("system status", () => {
           aiInputTokensToday: 500_000,
           linePushesMonth: 280,
           lastSuccessfulCron: Date.UTC(2026, 7, 23, 11, 30),
+          platformMetrics: { source: "cloudflare_analytics", dashboardUrl: "https://dash.cloudflare.com/" },
           warnings: [
             "AI หยุดชั่วคราว: ใช้โควตารายวันครบแล้ว",
             "Digest หยุดชั่วคราว: ใช้โควตา LINE รายเดือนครบแล้ว",

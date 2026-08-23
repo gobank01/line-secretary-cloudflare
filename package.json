@@ -14,7 +14,7 @@
     "deploy:production": "npm run build:production && CLOUDFLARE_ENV=production wrangler deploy",
     "dry-run:preview": "npm run build:preview && CLOUDFLARE_ENV=preview wrangler deploy --dry-run",
     "dry-run:production": "npm run build:production && CLOUDFLARE_ENV=production wrangler deploy --dry-run",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.worker-tests.json",
     "test:worker": "vitest run --config vitest.config.ts",
     "test:ui": "vitest run --config vitest.ui.config.ts",
     "test": "npm run test:worker && npm run test:ui",
