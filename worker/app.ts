@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
 import { authRoutes } from "./routes/auth";
+import { controlsRoutes } from "./routes/controls";
 import { dashboardRoutes } from "./routes/dashboard";
 import { lineRoutes } from "./routes/line";
 
@@ -18,6 +19,7 @@ export const createApp = () => {
   app.route("/api/line", lineRoutes);
   app.route("/api/auth", authRoutes);
   app.route("/api", dashboardRoutes);
+  app.route("/api", controlsRoutes);
 
   app.notFound((context) => context.json({ error: "not_found" }, 404));
   app.onError((error, context) => {

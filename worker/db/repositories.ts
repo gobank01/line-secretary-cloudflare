@@ -495,3 +495,235 @@ export async function getSystemHealth(
     warnings: [],
   };
 }
+
+interface CategoryRow {
+  id: number;
+  slug: string;
+  name: string;
+  color: string;
+  sort_order: number;
+  active: number;
+}
+
+function categoryFrom(row: CategoryRow) {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    color: row.color,
+    sortOrder: row.sort_order,
+    active: row.active === 1,
+  };
+}
+
+function auditStatement(
+  db: D1Database,
+  action: string,
+  entityType: string,
+  entityId: string,
+  before: unknown,
+  after: unknown,
+  now: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO audit_log(actor,action,entity_type,entity_id,before_json,after_json,created_at)
+       VALUES('owner',?,?,?,?,?,?)`,
+    )
+    .bind(action, entityType, entityId, JSON.stringify(before), JSON.stringify(after), now);
+}
+
+export async function assignOwnerCategory(
+  db: D1Database,
+  sourceId: string,
+  categoryId: number,
+  locked: boolean,
+  now: number,
+) {
+  const [group, category] = await Promise.all([
+    db
+      .prepare("SELECT category_id,category_locked,category_source FROM groups WHERE source_id=?")
+      .bind(sourceId)
+      .first<{ category_id: number | null; category_locked: number; category_source: string | null }>(),
+    db.prepare("SELECT id FROM categories WHERE id=? AND active=1").bind(categoryId).first<{ id: number }>(),
+  ]);
+  if (!group) return { kind: "group_not_found" as const };
+  if (!category) return { kind: "category_not_found" as const };
+
+  const before = {
+    categoryId: group.category_id,
+    categoryLocked: group.category_locked === 1,
+    categorySource: group.category_source,
+  };
+  const after = { categoryId, categoryLocked: locked, categorySource: "manual" as const };
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE groups SET category_id=?,category_source='manual',category_locked=?,
+         needs_category_review=0,updated_at=? WHERE source_id=?`,
+      )
+      .bind(categoryId, locked ? 1 : 0, now, sourceId),
+    auditStatement(db, "group.category_changed", "group", sourceId, before, after, now),
+  ]);
+  return { kind: "ok" as const, value: after };
+}
+
+export async function setOwnerGroupStatus(db: D1Database, sourceId: string, active: boolean, now: number) {
+  const group = await db.prepare("SELECT active FROM groups WHERE source_id=?").bind(sourceId).first<{ active: number }>();
+  if (!group) return null;
+  await db.batch([
+    db.prepare("UPDATE groups SET active=?,updated_at=? WHERE source_id=?").bind(active ? 1 : 0, now, sourceId),
+    auditStatement(
+      db,
+      active ? "group.resumed" : "group.paused",
+      "group",
+      sourceId,
+      { active: group.active === 1 },
+      { active },
+      now,
+    ),
+  ]);
+  return { active };
+}
+
+export async function deleteGroupRawHistory(db: D1Database, sourceId: string, now: number) {
+  const exists = await db.prepare("SELECT 1 AS found FROM groups WHERE source_id=?").bind(sourceId).first<number>("found");
+  if (!exists) return null;
+  const count =
+    (await db.prepare("SELECT count(*) AS count FROM messages WHERE group_id=?").bind(sourceId).first<number>("count")) ?? 0;
+  await db.batch([
+    db.prepare("DELETE FROM messages WHERE group_id=?").bind(sourceId),
+    auditStatement(
+      db,
+      "group.raw_history_deleted",
+      "group",
+      sourceId,
+      { messageCount: count },
+      { messageCount: 0 },
+      now,
+    ),
+  ]);
+  return { deletedMessages: count };
+}
+
+export async function setOwnerAlertStatus(
+  db: D1Database,
+  alertId: number,
+  status: "open" | "acknowledged" | "resolved",
+  now: number,
+) {
+  const alert = await db
+    .prepare("SELECT status,acknowledged_at,resolved_at FROM alerts WHERE id=?")
+    .bind(alertId)
+    .first<{ status: string; acknowledged_at: number | null; resolved_at: number | null }>();
+  if (!alert) return null;
+
+  const acknowledgedAt = status === "open" ? null : status === "acknowledged" ? now : (alert.acknowledged_at ?? now);
+  const resolvedAt = status === "resolved" ? now : null;
+  await db.batch([
+    db
+      .prepare("UPDATE alerts SET status=?,acknowledged_at=?,resolved_at=? WHERE id=?")
+      .bind(status, acknowledgedAt, resolvedAt, alertId),
+    auditStatement(
+      db,
+      "alert.status_changed",
+      "alert",
+      String(alertId),
+      { status: alert.status },
+      { status },
+      now,
+    ),
+  ]);
+  return { id: alertId, status, acknowledgedAt, resolvedAt };
+}
+
+export async function createOwnerCategory(
+  db: D1Database,
+  input: { slug: string; name: string; color: string },
+  now: number,
+) {
+  const existing = await db.prepare("SELECT id FROM categories WHERE slug=?").bind(input.slug).first<number>("id");
+  if (existing) return { kind: "conflict" as const };
+  const sortOrder =
+    ((await db.prepare("SELECT COALESCE(max(sort_order),0)+1 AS next FROM categories").first<number>("next")) ?? 1);
+  await db
+    .prepare("INSERT INTO categories(slug,name,color,sort_order,active) VALUES(?,?,?,?,1)")
+    .bind(input.slug, input.name, input.color, sortOrder)
+    .run();
+  const row = await db.prepare("SELECT id,slug,name,color,sort_order,active FROM categories WHERE slug=?")
+    .bind(input.slug)
+    .first<CategoryRow>();
+  if (!row) throw new Error("Failed to create category");
+  await auditStatement(db, "category.created", "category", String(row.id), null, categoryFrom(row), now).run();
+  return { kind: "ok" as const, value: categoryFrom(row) };
+}
+
+export async function updateOwnerCategory(
+  db: D1Database,
+  categoryId: number,
+  changes: { name?: string; color?: string; active?: boolean },
+  now: number,
+) {
+  const row = await db.prepare("SELECT id,slug,name,color,sort_order,active FROM categories WHERE id=?")
+    .bind(categoryId)
+    .first<CategoryRow>();
+  if (!row) return null;
+  const before = categoryFrom(row);
+  const after = {
+    ...before,
+    ...(changes.name !== undefined ? { name: changes.name } : {}),
+    ...(changes.color !== undefined ? { color: changes.color } : {}),
+    ...(changes.active !== undefined ? { active: changes.active } : {}),
+  };
+  await db.batch([
+    db
+      .prepare("UPDATE categories SET name=?,color=?,active=? WHERE id=?")
+      .bind(after.name, after.color, after.active ? 1 : 0, categoryId),
+    auditStatement(db, "category.updated", "category", String(categoryId), before, after, now),
+  ]);
+  return after;
+}
+
+export async function listAuditLog(
+  db: D1Database,
+  options: { entityType?: string; entityId?: string; limit: number },
+) {
+  const conditions: string[] = [];
+  const bindings: Array<string | number> = [];
+  if (options.entityType) {
+    conditions.push("entity_type=?");
+    bindings.push(options.entityType);
+  }
+  if (options.entityId) {
+    conditions.push("entity_id=?");
+    bindings.push(options.entityId);
+  }
+  bindings.push(options.limit);
+  const result = await db
+    .prepare(
+      `SELECT id,actor,action,entity_type,entity_id,before_json,after_json,created_at FROM audit_log
+       ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
+       ORDER BY created_at DESC,id DESC LIMIT ?`,
+    )
+    .bind(...bindings)
+    .all<{
+      id: number;
+      actor: string;
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      before_json: string | null;
+      after_json: string | null;
+      created_at: number;
+    }>();
+  return result.results.map((entry) => ({
+    id: entry.id,
+    actor: entry.actor,
+    action: entry.action,
+    entityType: entry.entity_type,
+    entityId: entry.entity_id,
+    before: entry.before_json ? JSON.parse(entry.before_json) : null,
+    after: entry.after_json ? JSON.parse(entry.after_json) : null,
+    createdAt: entry.created_at,
+  }));
+}
