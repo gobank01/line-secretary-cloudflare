@@ -1,9 +1,40 @@
+import { useCallback, useEffect, useState } from "react";
+import { getSession } from "./api";
+import Dashboard from "./components/Dashboard";
+import Login from "./components/Login";
+
+type AuthState = "checking" | "authenticated" | "unauthenticated";
+
 export default function App() {
-  return (
-    <main style={{ maxWidth: 720, margin: "80px auto", padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <p style={{ color: "#64748b", marginBottom: 8 }}>Cloudflare prototype</p>
-      <h1 style={{ margin: 0 }}>เลขากลุ่ม</h1>
-      <p>กำลังเตรียม dashboard สำหรับติดตาม 100 กลุ่ม</p>
-    </main>
+  const [auth, setAuth] = useState<AuthState>("checking");
+  const authenticate = useCallback(() => setAuth("authenticated"), []);
+  const unauthenticate = useCallback(() => setAuth("unauthenticated"), []);
+
+  useEffect(() => {
+    let active = true;
+    void getSession()
+      .then(() => {
+        if (active) authenticate();
+      })
+      .catch(() => {
+        if (active) unauthenticate();
+      });
+    return () => {
+      active = false;
+    };
+  }, [authenticate, unauthenticate]);
+
+  if (auth === "checking") {
+    return (
+      <main className="session-loading" role="status" aria-label="กำลังตรวจสอบสิทธิ์">
+        <div className="brand-mark brand-mark--large" aria-hidden="true" />
+        <span>กำลังเปิดพื้นที่ส่วนตัว…</span>
+      </main>
+    );
+  }
+  return auth === "authenticated" ? (
+    <Dashboard onUnauthorized={unauthenticate} />
+  ) : (
+    <Login onAuthenticated={authenticate} />
   );
 }
