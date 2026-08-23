@@ -11,6 +11,13 @@ const dashboard = {
   actionQueue: [],
   health: { backlogGroups: 0, aiCallsToday: 0, aiInputTokensToday: 0, linePushesMonth: 0, warnings: [] },
 };
+const emptyDashboard = {
+  ...dashboard,
+  kpis: { totalGroups: 0, urgent: 0, waiting: 0, active: 0, normal: 0 },
+  categories: [],
+  groups: [],
+  actionQueue: [],
+};
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
@@ -27,7 +34,8 @@ describe("owner login", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json({ error: "unauthorized" }, 401))
       .mockResolvedValueOnce(json({ authenticated: true }))
-      .mockResolvedValueOnce(json(dashboard));
+      .mockResolvedValueOnce(json(dashboard))
+      .mockResolvedValueOnce(json(emptyDashboard));
     const user = userEvent.setup();
     render(<App />);
 
@@ -65,6 +73,7 @@ describe("owner login", () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json({ authenticated: true }))
       .mockResolvedValueOnce(json(dashboard))
+      .mockResolvedValueOnce(json(emptyDashboard))
       .mockResolvedValueOnce(json({ authenticated: false }));
     const user = userEvent.setup();
     render(<App />);

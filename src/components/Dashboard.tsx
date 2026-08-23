@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, getAlertsSince, getDashboard, logout } from "../api";
 import type { DashboardPayload } from "../types";
+import ActionView, { type ActionRow } from "./ActionView";
+import CategoryView, { type FilteredCategory } from "./CategoryView";
+import Filters, { type DashboardFilters, type ViewMode } from "./Filters";
 import SystemStatus from "./SystemStatus";
 
 interface DashboardProps {
@@ -20,11 +23,21 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
   const [pollError, setPollError] = useState(false);
   const [online, setOnline] = useState(() => navigator.onLine);
   const [logoutError, setLogoutError] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    localStorage.getItem("line-secretary:view") === "category" ? "category" : "action",
+  );
+  const [filters, setFilters] = useState<DashboardFilters>({
+    query: "",
+    categoryId: "all",
+    priority: "all",
+    dataMode: "all",
+  });
+  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
   const alertCursor = useRef(0);
 
   useEffect(() => {
     let active = true;
-    void getDashboard()
+    void getDashboard("all")
       .then((payload) => {
         if (!active) return;
         setData(payload);
@@ -77,6 +90,82 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
       setLogoutError(true);
     }
   };
+
+  const changeView = (value: ViewMode) => {
+    setViewMode(value);
+    localStorage.setItem("line-secretary:view", value);
+  };
+
+  const filteredGroups = useMemo(() => {
+    if (!data) return [];
+    const query = filters.query.trim().toLocaleLowerCase("th");
+    return data.groups.filter((group) => {
+      if (filters.dataMode !== "all" && group.dataMode !== filters.dataMode) return false;
+      if (filters.categoryId !== "all" && group.category?.id !== filters.categoryId) return false;
+      if (filters.priority === "urgent" && group.priorityScore < 80) return false;
+      if (filters.priority === "waiting" && (group.priorityScore < 60 || group.priorityScore >= 80)) return false;
+      if (filters.priority === "normal" && group.priorityScore >= 60) return false;
+      if (query && !`${group.title} ${group.latestSummary ?? ""}`.toLocaleLowerCase("th").includes(query)) return false;
+      return true;
+    });
+  }, [data, filters]);
+
+  const filteredActions = useMemo<ActionRow[]>(() => {
+    if (!data) return [];
+    const allowed = new Map(filteredGroups.map((group) => [group.id, group]));
+    return data.actionQueue
+      .flatMap((action) => {
+        const group = allowed.get(action.groupId);
+        return group
+          ? [{ ...action, dataMode: group.dataMode, categoryId: group.category?.id ?? null }]
+          : [];
+      })
+      .sort(
+        (left, right) =>
+          right.priorityScore - left.priorityScore ||
+          right.openAlerts - left.openAlerts ||
+          (left.lastActivityAt ?? 0) - (right.lastActivityAt ?? 0),
+      );
+  }, [data, filteredGroups]);
+
+  const filteredCategories = useMemo<FilteredCategory[]>(() => {
+    if (!data) return [];
+    return data.categories.flatMap((category) => {
+      const groups = filteredGroups.filter((group) => group.category?.id === category.id);
+      if (groups.length === 0) return [];
+      let mostRecentAt: number | null = null;
+      for (const group of groups) {
+        if (group.lastMessageAt !== null && (mostRecentAt === null || group.lastMessageAt > mostRecentAt)) {
+          mostRecentAt = group.lastMessageAt;
+        }
+      }
+      return [{
+        ...category,
+        groupCount: groups.length,
+        urgentCount: groups.filter((group) => group.priorityScore >= 80).length,
+        openActionCount: groups.filter((group) => group.openAlerts > 0 || group.actionItems.length > 0).length,
+        mostRecentAt,
+      }];
+    });
+  }, [data, filteredGroups]);
+
+  const filteredKpis = useMemo(
+    () => ({
+      urgent: filteredGroups.filter((group) => group.priorityScore >= 80).length,
+      waiting: filteredGroups.filter((group) => group.priorityScore >= 60 && group.priorityScore < 80).length,
+      active: filteredGroups.filter((group) => group.priorityScore >= 30 && group.priorityScore < 60).length,
+      normal: filteredGroups.filter((group) => group.priorityScore < 30).length,
+    }),
+    [filteredGroups],
+  );
+  const hasActiveFilters =
+    filters.query.trim() !== "" ||
+    filters.categoryId !== "all" ||
+    filters.priority !== "all" ||
+    filters.dataMode !== "all";
+  const useServerAggregate = !hasActiveFilters && data !== null && data.groups.length === 0;
+  const displayedKpis = useServerAggregate ? data.kpis : filteredKpis;
+  const displayedTotal = useServerAggregate ? data.kpis.totalGroups : filteredGroups.length;
 
   if (!data && !loadError) {
     return (
@@ -136,7 +225,7 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
         <section className="dashboard-intro">
           <div>
             <p className="eyebrow">ภาพรวมวันนี้</p>
-            <h2>ติดตาม {data.kpis.totalGroups} กลุ่ม</h2>
+            <h2>ติดตาม {displayedTotal} กลุ่ม</h2>
             <p>เริ่มจากเรื่องเร่งด่วน แล้วค่อยไล่ดูตามหมวดที่รับผิดชอบ</p>
           </div>
           <SystemStatus health={data.health} generatedAt={data.generatedAt} />
@@ -146,21 +235,38 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
           {KPI_ITEMS.map((item) => (
             <article className={`kpi-card kpi-card--${item.tone}`} key={item.key}>
               <span className="kpi-label">{item.label}</span>
-              <strong>{data.kpis[item.key]}</strong>
+              <strong>{displayedKpis[item.key]}</strong>
             </article>
           ))}
         </section>
 
-        <section className="dashboard-placeholder" aria-label="พื้นที่รายการกลุ่ม">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">WORKSPACE</p>
-              <h2>รายการที่ต้องดู</h2>
-            </div>
-            <span className="count-badge">{data.actionQueue.length} รายการ</span>
+        <Filters
+          viewMode={viewMode}
+          filters={filters}
+          categories={data.categories}
+          onViewMode={changeView}
+          onFilters={setFilters}
+        />
+        {focusedGroupId ? (
+          <div className="selection-notice" role="status">
+            เลือกกลุ่ม {data.groups.find((group) => group.id === focusedGroupId)?.title ?? focusedGroupId}
+            <button type="button" onClick={() => setFocusedGroupId(null)}>ปิด</button>
           </div>
-          <p>เลือกดูแบบตามสิ่งที่ต้องทำ หรือตามหมวดหมู่ได้จากแถบมุมมอง</p>
-        </section>
+        ) : null}
+        {viewMode === "action" ? (
+          <ActionView actions={filteredActions} groups={filteredGroups} onOpenGroup={setFocusedGroupId} />
+        ) : (
+          <CategoryView
+            categories={filteredCategories}
+            groups={filteredGroups}
+            reviewCount={filteredGroups.filter((group) => group.needsCategoryReview).length}
+            onCategory={(category) => {
+              if (category === "review") setFilters((current) => ({ ...current, categoryId: "all" }));
+              else setFilters((current) => ({ ...current, categoryId: category }));
+            }}
+            onOpenGroup={setFocusedGroupId}
+          />
+        )}
       </main>
     </div>
   );

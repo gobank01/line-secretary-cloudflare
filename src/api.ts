@@ -41,8 +41,47 @@ export const logout = () =>
     method: "POST",
   });
 
-export const getDashboard = (mode: DataMode = "demo") =>
-  request<DashboardPayload>(`/api/dashboard?mode=${mode}`);
+function combineDashboards(demo: DashboardPayload, real: DashboardPayload): DashboardPayload {
+  const categories = new Map<number, DashboardPayload["categories"][number]>();
+  for (const category of [...demo.categories, ...real.categories]) {
+    const current = categories.get(category.id);
+    categories.set(
+      category.id,
+      current
+        ? {
+            ...current,
+            groupCount: current.groupCount + category.groupCount,
+            urgentCount: current.urgentCount + category.urgentCount,
+            openActionCount: current.openActionCount + category.openActionCount,
+          }
+        : { ...category },
+    );
+  }
+  return {
+    generatedAt: Math.max(demo.generatedAt, real.generatedAt),
+    kpis: {
+      totalGroups: demo.kpis.totalGroups + real.kpis.totalGroups,
+      urgent: demo.kpis.urgent + real.kpis.urgent,
+      waiting: demo.kpis.waiting + real.kpis.waiting,
+      active: demo.kpis.active + real.kpis.active,
+      normal: demo.kpis.normal + real.kpis.normal,
+    },
+    categories: [...categories.values()],
+    groups: [...demo.groups, ...real.groups].sort((left, right) => right.priorityScore - left.priorityScore),
+    actionQueue: [...demo.actionQueue, ...real.actionQueue].sort(
+      (left, right) => right.priorityScore - left.priorityScore,
+    ),
+    health: real.health,
+  };
+}
+
+export const getDashboard = (mode: DataMode | "all" = "demo") => {
+  if (mode !== "all") return request<DashboardPayload>(`/api/dashboard?mode=${mode}`);
+  return Promise.all([
+    request<DashboardPayload>("/api/dashboard?mode=demo"),
+    request<DashboardPayload>("/api/dashboard?mode=real"),
+  ]).then(([demo, real]) => combineDashboards(demo, real));
+};
 
 export const getAlertsSince = (updatedAfter: number) =>
   request<{ alerts: AlertItem[] }>(`/api/alerts?updated_after=${updatedAfter}&limit=100`);

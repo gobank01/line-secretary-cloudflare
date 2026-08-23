@@ -10,6 +10,13 @@ const dashboard = {
   actionQueue: [],
   health: { backlogGroups: 2, aiCallsToday: 18, aiInputTokensToday: 1200, linePushesMonth: 42, warnings: [] },
 };
+const emptyDashboard = {
+  ...dashboard,
+  kpis: { totalGroups: 0, urgent: 0, waiting: 0, active: 0, normal: 0 },
+  categories: [],
+  groups: [],
+  actionQueue: [],
+};
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
@@ -29,7 +36,8 @@ describe("resilient dashboard shell", () => {
     });
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json({ authenticated: true }))
-      .mockReturnValueOnce(pendingDashboard);
+      .mockReturnValueOnce(pendingDashboard)
+      .mockResolvedValueOnce(json(emptyDashboard));
     render(<App />);
 
     expect(await screen.findByRole("status", { name: "กำลังโหลด dashboard" })).toBeVisible();
@@ -45,6 +53,7 @@ describe("resilient dashboard shell", () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json({ authenticated: true }))
       .mockResolvedValueOnce(json(dashboard))
+      .mockResolvedValueOnce(json(emptyDashboard))
       .mockRejectedValueOnce(new Error("offline"));
     render(<App />);
 
@@ -60,7 +69,8 @@ describe("resilient dashboard shell", () => {
   it("keeps cached data visible while the browser is offline", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json({ authenticated: true }))
-      .mockResolvedValueOnce(json(dashboard));
+      .mockResolvedValueOnce(json(dashboard))
+      .mockResolvedValueOnce(json(emptyDashboard));
     render(<App />);
     expect(await screen.findByText("ติดตาม 100 กลุ่ม")).toBeVisible();
 
