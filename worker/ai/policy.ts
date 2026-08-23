@@ -5,9 +5,19 @@ export interface AiEligibilityInput {
   budgetAvailable: boolean;
 }
 
-export function isAiEligible(input: AiEligibilityInput): boolean {
+export function isAiEligible(
+  input: AiEligibilityInput,
+  thresholds: { minimumMessages: number; maximumWaitMinutes: number } = {
+    minimumMessages: 5,
+    maximumWaitMinutes: 120,
+  },
+): boolean {
   if (!input.budgetAvailable || input.newMessages < 1) return false;
-  return input.newMessages >= 5 || input.oldestAgeMinutes >= 120 || input.hasUrgentAlert;
+  return (
+    input.newMessages >= thresholds.minimumMessages ||
+    input.oldestAgeMinutes >= thresholds.maximumWaitMinutes ||
+    input.hasUrgentAlert
+  );
 }
 
 export function estimateInputTokens(characters: number): number {
