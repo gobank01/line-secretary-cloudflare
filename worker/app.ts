@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
+import { lineRoutes } from "./routes/line";
 
 export const createApp = () => {
   const app = new Hono<{ Bindings: AppEnv }>();
@@ -12,6 +13,8 @@ export const createApp = () => {
     }),
   );
 
+  app.route("/api/line", lineRoutes);
+
   app.notFound((context) => context.json({ error: "not_found" }, 404));
   app.onError((error, context) => {
     console.error("request_failed", { path: context.req.path, name: error.name });
@@ -20,4 +23,3 @@ export const createApp = () => {
 
   return app;
 };
-

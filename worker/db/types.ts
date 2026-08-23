@@ -19,3 +19,13 @@ export interface NewMessage {
   retentionExpiresAt: number;
 }
 
+export interface GroupRecord {
+  sourceId: string;
+  title: string;
+  active: boolean;
+  disclosureSentAt: number | null;
+}
+
+export interface RegisteredGroup extends GroupRecord {
+  created: boolean;
+}
