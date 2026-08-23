@@ -36,5 +36,69 @@
     "AI_MAX_WAIT_MINUTES": "120",
     "LINE_PUSH_ENABLED": "false",
     "DASHBOARD_URL": "http://localhost:5173"
+  },
+  "env": {
+    "preview": {
+      "name": "line-secretary-cloudflare-preview",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "line-secretary-cloudflare-preview",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "line-secretary-group-summarizer-preview",
+          "binding": "GROUP_SUMMARIZER",
+          "class_name": "GroupSummarizer"
+        }
+      ],
+      "vars": {
+        "APP_ENV": "preview",
+        "APP_TIMEZONE": "Asia/Bangkok",
+        "OPENROUTER_MODEL": "google/gemini-2.5-flash",
+        "REAL_GROUP_LIMIT": "10",
+        "AUTOMATED_MONTHLY_PUSH_CAP": "280",
+        "AI_DAILY_CALL_CAP": "120",
+        "AI_DAILY_INPUT_TOKEN_CAP": "500000",
+        "AI_MIN_MESSAGES": "5",
+        "AI_MAX_WAIT_MINUTES": "120",
+        "LINE_PUSH_ENABLED": "false",
+        "DASHBOARD_URL": "https://line-secretary-cloudflare-preview.example.workers.dev"
+      }
+    },
+    "production": {
+      "name": "line-secretary-cloudflare-production",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "line-secretary-cloudflare-production",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "line-secretary-group-summarizer-production",
+          "binding": "GROUP_SUMMARIZER",
+          "class_name": "GroupSummarizer"
+        }
+      ],
+      "vars": {
+        "APP_ENV": "production",
+        "APP_TIMEZONE": "Asia/Bangkok",
+        "OPENROUTER_MODEL": "google/gemini-2.5-flash",
+        "REAL_GROUP_LIMIT": "10",
+        "AUTOMATED_MONTHLY_PUSH_CAP": "280",
+        "AI_DAILY_CALL_CAP": "120",
+        "AI_DAILY_INPUT_TOKEN_CAP": "500000",
+        "AI_MIN_MESSAGES": "5",
+        "AI_MAX_WAIT_MINUTES": "120",
+        "LINE_PUSH_ENABLED": "false",
+        "DASHBOARD_URL": "https://line-secretary-cloudflare-production.example.workers.dev"
+      }
+    }
   }
 }

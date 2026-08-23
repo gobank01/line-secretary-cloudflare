@@ -1,0 +1,8 @@
+# Copy this file to .dev.vars for local development only.
+# Never commit real values or paste them into CI/deployment logs.
+DASHBOARD_PASSWORD="choose-a-local-password"
+SESSION_SECRET="replace-with-at-least-32-random-bytes"
+LINE_CHANNEL_SECRET="replace-with-line-channel-secret"
+LINE_CHANNEL_ACCESS_TOKEN="replace-with-line-channel-access-token"
+OWNER_USER_ID="replace-with-line-owner-user-id"
+OPENROUTER_API_KEY="replace-with-openrouter-api-key"
