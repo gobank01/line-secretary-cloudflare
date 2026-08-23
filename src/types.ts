@@ -19,6 +19,9 @@ export interface GroupSummary {
   lastMessageAt: number | null;
   lastSummaryAt: number | null;
   needsCategoryReview: boolean;
+  categoryLocked: boolean;
+  categoryConfidence: number | null;
+  categorySource: "ai" | "manual" | null;
   category: { id: number; slug: string; name: string; color: string } | null;
   latestSummary: string | null;
   actionItems: string[];
@@ -44,6 +47,7 @@ export interface SystemHealth {
   aiCallsToday: number;
   aiInputTokensToday: number;
   linePushesMonth: number;
+  lastSuccessfulCron: number | null;
   warnings: string[];
 }
 

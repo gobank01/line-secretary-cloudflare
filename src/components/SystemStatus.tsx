@@ -6,6 +6,8 @@ interface SystemStatusProps {
 }
 
 export default function SystemStatus({ health, generatedAt }: SystemStatusProps) {
+  const number = new Intl.NumberFormat("en-US");
+  const lastCron = health.lastSuccessfulCron ?? null;
   return (
     <section className="system-status" aria-label="สถานะระบบ">
       <div className="freshness">
@@ -17,9 +19,19 @@ export default function SystemStatus({ health, generatedAt }: SystemStatusProps)
       </div>
       <div className="system-metrics">
         <span>คิวรอสรุป {health.backlogGroups} กลุ่ม</span>
-        <span>AI วันนี้ {health.aiCallsToday} ครั้ง</span>
+        <span>AI วันนี้ {health.aiCallsToday} ครั้ง · {number.format(health.aiInputTokensToday)} tokens</span>
         <span>LINE เดือนนี้ {health.linePushesMonth} / 280</span>
+        <span>
+          Cron ล่าสุด {lastCron
+            ? new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(lastCron)
+            : "ยังไม่ทำงาน"}
+        </span>
       </div>
+      {health.warnings.length > 0 ? (
+        <div className="health-warnings" role="status" aria-label="คำเตือนระบบ">
+          {health.warnings.map((warning) => <span key={warning}>{warning}</span>)}
+        </div>
+      ) : null}
     </section>
   );
 }

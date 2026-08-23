@@ -184,6 +184,9 @@ interface GroupSummaryRow {
   last_message_at: number | null;
   last_summary_at: number | null;
   needs_category_review: number;
+  category_locked: number;
+  category_confidence: number | null;
+  category_source: "ai" | "manual" | null;
   category_id: number | null;
   category_slug: string | null;
   category_name: string | null;
@@ -214,6 +217,9 @@ function groupSummaryFrom(row: GroupSummaryRow): GroupSummaryDto {
     lastMessageAt: row.last_message_at,
     lastSummaryAt: row.last_summary_at,
     needsCategoryReview: row.needs_category_review === 1,
+    categoryLocked: row.category_locked === 1,
+    categoryConfidence: row.category_confidence,
+    categorySource: row.category_source,
     category:
       row.category_id === null || row.category_slug === null || row.category_name === null || row.category_color === null
         ? null
@@ -245,7 +251,8 @@ export async function listGroupSummaries(
   const result = await db
     .prepare(
       `SELECT g.source_id,g.title,g.data_mode,g.active,g.priority_score,g.last_message_at,g.last_summary_at,
-        g.needs_category_review,c.id AS category_id,c.slug AS category_slug,c.name AS category_name,
+        g.needs_category_review,g.category_locked,g.category_confidence,g.category_source,
+        c.id AS category_id,c.slug AS category_slug,c.name AS category_name,
         c.color AS category_color,r.summary AS report_summary,r.action_items_json,r.unresolved_json,
         (SELECT count(*) FROM alerts a WHERE a.group_id=g.source_id AND a.status='open') AS open_alerts
        FROM groups g
@@ -347,7 +354,8 @@ export async function getGroupDetail(db: D1Database, sourceId: string) {
   const row = await db
     .prepare(
       `SELECT g.source_id,g.title,g.data_mode,g.active,g.priority_score,g.last_message_at,g.last_summary_at,
-        g.needs_category_review,c.id AS category_id,c.slug AS category_slug,c.name AS category_name,
+        g.needs_category_review,g.category_locked,g.category_confidence,g.category_source,
+        c.id AS category_id,c.slug AS category_slug,c.name AS category_name,
         c.color AS category_color,NULL AS report_summary,NULL AS action_items_json,NULL AS unresolved_json,
         (SELECT count(*) FROM alerts a WHERE a.group_id=g.source_id AND a.status='open') AS open_alerts,
         (SELECT count(*) FROM messages m WHERE m.group_id=g.source_id) AS message_count
@@ -469,9 +477,10 @@ export async function getSystemHealth(
   db: D1Database,
   now: number,
   timeZone: string,
+  limits?: { aiCallCap: number; aiInputTokenCap: number; linePushCap: number },
 ): Promise<DashboardHealthDto> {
   const date = localDateParts(now, timeZone);
-  const [backlog, today, month] = await Promise.all([
+  const [backlog, today, month, lastCron] = await Promise.all([
     db
       .prepare(
         `SELECT count(DISTINCT g.source_id) AS count FROM groups g JOIN messages m ON m.group_id=g.source_id
@@ -486,13 +495,29 @@ export async function getSystemHealth(
       .prepare("SELECT COALESCE(sum(line_pushes),0) AS pushes FROM usage_daily WHERE day LIKE ?")
       .bind(`${date.month}%`)
       .first<number>("pushes"),
+    db
+      .prepare("SELECT max(completed_at) AS completed_at FROM job_runs WHERE status='dispatched'")
+      .first<number>("completed_at"),
   ]);
+  const backlogGroups = backlog ?? 0;
+  const aiCallsToday = today?.ai_calls ?? 0;
+  const aiInputTokensToday = today?.ai_input_tokens ?? 0;
+  const linePushesMonth = month ?? 0;
+  const warnings: string[] = [];
+  if (limits && (aiCallsToday >= limits.aiCallCap || aiInputTokensToday >= limits.aiInputTokenCap)) {
+    warnings.push("AI หยุดชั่วคราว: ใช้โควตารายวันครบแล้ว");
+  }
+  if (limits && linePushesMonth >= limits.linePushCap) {
+    warnings.push("Digest หยุดชั่วคราว: ใช้โควตา LINE รายเดือนครบแล้ว");
+  }
+  if (backlogGroups > 0) warnings.push(`สรุปล่าช้า: มี ${backlogGroups} กลุ่มรอประมวลผล`);
   return {
-    backlogGroups: backlog ?? 0,
-    aiCallsToday: today?.ai_calls ?? 0,
-    aiInputTokensToday: today?.ai_input_tokens ?? 0,
-    linePushesMonth: month ?? 0,
-    warnings: [],
+    backlogGroups,
+    aiCallsToday,
+    aiInputTokensToday,
+    linePushesMonth,
+    lastSuccessfulCron: lastCron ?? null,
+    warnings,
   };
 }
 

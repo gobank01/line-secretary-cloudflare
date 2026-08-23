@@ -44,7 +44,7 @@ describe("resilient dashboard shell", () => {
     resolveDashboard(json(dashboard));
 
     expect(await screen.findByText("อัปเดตล่าสุด")).toBeVisible();
-    expect(screen.getByText("AI วันนี้ 18 ครั้ง")).toBeVisible();
+    expect(screen.getByText("AI วันนี้ 18 ครั้ง · 1,200 tokens")).toBeVisible();
     expect(screen.getByText("LINE เดือนนี้ 42 / 280")).toBeVisible();
   });
 

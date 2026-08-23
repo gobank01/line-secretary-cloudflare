@@ -36,7 +36,11 @@ dashboardRoutes.get("/dashboard", async (context) => {
     listGroupSummaries(context.env.DB, { mode, limit: 100, offset: 0 }),
     getDashboardKpis(context.env.DB, mode),
     listCategorySummaries(context.env.DB, mode),
-    getSystemHealth(context.env.DB, now, context.env.APP_TIMEZONE),
+    getSystemHealth(context.env.DB, now, context.env.APP_TIMEZONE, {
+      aiCallCap: Number.parseInt(context.env.AI_DAILY_CALL_CAP, 10),
+      aiInputTokenCap: Number.parseInt(context.env.AI_DAILY_INPUT_TOKEN_CAP, 10),
+      linePushCap: Number.parseInt(context.env.AUTOMATED_MONTHLY_PUSH_CAP, 10),
+    }),
   ]);
   const payload: DashboardPayload = {
     generatedAt: now,
@@ -87,5 +91,9 @@ dashboardRoutes.get("/categories", async (context) => {
 });
 
 dashboardRoutes.get("/system/health", async (context) =>
-  context.json(await getSystemHealth(context.env.DB, Date.now(), context.env.APP_TIMEZONE)),
+  context.json(await getSystemHealth(context.env.DB, Date.now(), context.env.APP_TIMEZONE, {
+    aiCallCap: Number.parseInt(context.env.AI_DAILY_CALL_CAP, 10),
+    aiInputTokenCap: Number.parseInt(context.env.AI_DAILY_INPUT_TOKEN_CAP, 10),
+    linePushCap: Number.parseInt(context.env.AUTOMATED_MONTHLY_PUSH_CAP, 10),
+  })),
 );

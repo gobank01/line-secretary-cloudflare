@@ -101,6 +101,7 @@ describe("dashboard read API", () => {
       aiCallsToday: number;
       aiInputTokensToday: number;
       linePushesMonth: number;
+      lastSuccessfulCron: number | null;
       warnings: string[];
     }>();
     expect(health).toEqual({
@@ -108,6 +109,7 @@ describe("dashboard read API", () => {
       aiCallsToday: 0,
       aiInputTokensToday: 0,
       linePushesMonth: 0,
+      lastSuccessfulCron: null,
       warnings: [],
     });
   });

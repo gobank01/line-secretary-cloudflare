@@ -4,6 +4,7 @@ import type { DashboardPayload } from "../types";
 import ActionView, { type ActionRow } from "./ActionView";
 import CategoryView, { type FilteredCategory } from "./CategoryView";
 import Filters, { type DashboardFilters, type ViewMode } from "./Filters";
+import GroupDetail from "./GroupDetail";
 import SystemStatus from "./SystemStatus";
 
 interface DashboardProps {
@@ -32,7 +33,9 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     priority: "all",
     dataMode: "all",
   });
-  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
+  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get("group"),
+  );
   const alertCursor = useRef(0);
 
   useEffect(() => {
@@ -81,6 +84,12 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const onPopState = () => setFocusedGroupId(new URLSearchParams(window.location.search).get("group"));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   const signOut = async () => {
     setLogoutError(false);
     try {
@@ -94,6 +103,30 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
   const changeView = (value: ViewMode) => {
     setViewMode(value);
     localStorage.setItem("line-secretary:view", value);
+  };
+
+  const openGroup = (groupId: string) => {
+    const query = new URLSearchParams(window.location.search);
+    query.set("group", groupId);
+    window.history.pushState({}, "", `${window.location.pathname}?${query.toString()}${window.location.hash}`);
+    setFocusedGroupId(groupId);
+  };
+
+  const closeGroup = () => {
+    const query = new URLSearchParams(window.location.search);
+    query.delete("group");
+    const suffix = query.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${suffix ? `?${suffix}` : ""}${window.location.hash}`);
+    setFocusedGroupId(null);
+  };
+
+  const refreshDashboard = () => {
+    void getDashboard("all")
+      .then(setData)
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 401) onUnauthorized();
+        else setPollError(true);
+      });
   };
 
   const filteredGroups = useMemo(() => {
@@ -247,14 +280,8 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
           onViewMode={changeView}
           onFilters={setFilters}
         />
-        {focusedGroupId ? (
-          <div className="selection-notice" role="status">
-            เลือกกลุ่ม {data.groups.find((group) => group.id === focusedGroupId)?.title ?? focusedGroupId}
-            <button type="button" onClick={() => setFocusedGroupId(null)}>ปิด</button>
-          </div>
-        ) : null}
         {viewMode === "action" ? (
-          <ActionView actions={filteredActions} groups={filteredGroups} onOpenGroup={setFocusedGroupId} />
+          <ActionView actions={filteredActions} groups={filteredGroups} onOpenGroup={openGroup} />
         ) : (
           <CategoryView
             categories={filteredCategories}
@@ -264,10 +291,18 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
               if (category === "review") setFilters((current) => ({ ...current, categoryId: "all" }));
               else setFilters((current) => ({ ...current, categoryId: category }));
             }}
-            onOpenGroup={setFocusedGroupId}
+            onOpenGroup={openGroup}
           />
         )}
       </main>
+      {focusedGroupId ? (
+        <GroupDetail
+          groupId={focusedGroupId}
+          categories={data.categories}
+          onClose={closeGroup}
+          onChanged={refreshDashboard}
+        />
+      ) : null}
     </div>
   );
 }
