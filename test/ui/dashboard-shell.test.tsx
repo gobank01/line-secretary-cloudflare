@@ -8,7 +8,7 @@ const dashboard = {
   categories: [],
   groups: [],
   actionQueue: [],
-  health: { backlogGroups: 2, aiCallsToday: 18, aiInputTokensToday: 1200, linePushesMonth: 42, warnings: [] },
+  health: { backlogGroups: 2, aiCallsToday: 18, aiInputTokensToday: 1200, linePushesMonth: 42, linePushCap: 280, warnings: [] },
 };
 const emptyDashboard = {
   ...dashboard,

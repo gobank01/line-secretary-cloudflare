@@ -1,7 +1,6 @@
 export interface LineJoinEvent {
   type: "join";
   groupId: string;
-  replyToken: string;
   timestamp: number;
 }
 
@@ -43,8 +42,8 @@ export function parseLineEvents(payload: unknown): LineGroupEvent[] {
     if (typeof event.type !== "string" || typeof event.timestamp !== "number") continue;
 
     const groupId = event.source.groupId;
-    if (event.type === "join" && typeof event.replyToken === "string") {
-      normalized.push({ type: "join", groupId, replyToken: event.replyToken, timestamp: event.timestamp });
+    if (event.type === "join") {
+      normalized.push({ type: "join", groupId, timestamp: event.timestamp });
       continue;
     }
     if (event.type === "leave") {

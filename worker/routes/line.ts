@@ -45,17 +45,13 @@ async function handleEvent(
     return;
   }
 
-  const group = await registerRealGroup(
-    env.DB,
-    event.groupId,
-    event.timestamp,
-    Number.parseInt(env.REAL_GROUP_LIMIT, 10) || 10,
-  );
+  const realGroupLimit = Number.parseInt(env.REAL_GROUP_LIMIT, 10) || 10;
+  const group = await registerRealGroup(env.DB, event.groupId, event.timestamp, realGroupLimit);
 
   if (event.type === "join") {
     // The bot is fully silent — it never speaks in groups, not even on join.
     // The owner sees everything on the dashboard instead.
-    await recordGroupJoin(env.DB, event.groupId, event.timestamp);
+    await recordGroupJoin(env.DB, event.groupId, event.timestamp, realGroupLimit);
     if (group.created) {
       executionContext.waitUntil(
         refreshGroupName(env.DB, event.groupId, env.LINE_CHANNEL_ACCESS_TOKEN, event.timestamp),

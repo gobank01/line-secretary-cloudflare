@@ -204,6 +204,37 @@ describe("silent LINE ingestion", () => {
     ).toMatchObject({ active: 0 });
   });
 
+  it("reactivates a kicked group on re-invite and keeps ingesting", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.method === "GET") return Response.json({ groupName: "กลุ่มกลับมา" });
+      return Response.json({});
+    });
+    const groupId = "C-rejoin";
+    expect((await postWebhook([lineEvent({ type: "join", replyToken: "r1" }, groupId)])).status).toBe(200);
+    expect((await postWebhook([lineEvent({ type: "leave" }, groupId)])).status).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT active FROM groups WHERE source_id=?").bind(groupId).first<number>("active"),
+    ).toBe(0);
+
+    expect((await postWebhook([lineEvent({ type: "join", replyToken: "r2" }, groupId)])).status).toBe(200);
+    const row = await env.DB.prepare("SELECT active,left_at FROM groups WHERE source_id=?")
+      .bind(groupId)
+      .first<{ active: number; left_at: number | null }>();
+    expect(row).toMatchObject({ active: 1, left_at: null });
+
+    expect(
+      (
+        await postWebhook([
+          lineEvent({ type: "message", message: { type: "text", id: "m-rejoin", text: "กลับมาแล้ว" } }, groupId),
+        ])
+      ).status,
+    ).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS count FROM messages WHERE group_id=?").bind(groupId).first("count"),
+    ).toBe(1);
+  });
+
   it("never replies even for concurrent join deliveries", async () => {
     let replyCalls = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {

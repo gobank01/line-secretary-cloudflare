@@ -22,7 +22,11 @@ export default function Login({ onAuthenticated }: LoginProps) {
       setError(
         cause instanceof ApiError && cause.status === 429
           ? "ลองรหัสผ่านหลายครั้งเกินไป กรุณารอ 15 นาที"
-          : "รหัสผ่านไม่ถูกต้อง กรุณาลองอีกครั้ง",
+          : cause instanceof ApiError && cause.status === 503
+            ? "เซิร์ฟเวอร์ยังตั้งค่าไม่ครบ (DASHBOARD_PASSWORD ต้องยาวอย่างน้อย 12 ตัว และ SESSION_SECRET 32 ตัว)"
+            : cause instanceof ApiError && cause.status === 401
+              ? "รหัสผ่านไม่ถูกต้อง กรุณาลองอีกครั้ง"
+              : "เชื่อมต่อไม่สำเร็จ กรุณาลองอีกครั้ง",
       );
       setSubmitting(false);
     }

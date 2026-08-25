@@ -109,6 +109,7 @@ describe("dashboard read API", () => {
       aiCallsToday: 0,
       aiInputTokensToday: 0,
       linePushesMonth: 0,
+      linePushCap: 280,
       lastSuccessfulCron: null,
       platformMetrics: { source: "cloudflare_analytics", dashboardUrl: "https://dash.cloudflare.com/" },
       warnings: [],

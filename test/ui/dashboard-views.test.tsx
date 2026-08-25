@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../src/App";
 
-const health = { backlogGroups: 1, aiCallsToday: 3, aiInputTokensToday: 500, linePushesMonth: 20, warnings: [] };
+const health = { backlogGroups: 1, aiCallsToday: 3, aiInputTokensToday: 500, linePushesMonth: 20, linePushCap: 280, warnings: [] };
 const categories = [
   { id: 1, slug: "customer", name: "ลูกค้า", color: "#0ea5e9", groupCount: 1, urgentCount: 1, openActionCount: 1 },
   { id: 2, slug: "team", name: "ทีมงาน", color: "#8b5cf6", groupCount: 1, urgentCount: 0, openActionCount: 0 },

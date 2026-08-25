@@ -34,6 +34,26 @@ export interface WorkflowStepRunner {
 }
 
 const WORKFLOW_INPUT_BYTE_LIMIT = 240 * 1_024;
+// D1 allows at most 100 bound parameters per statement; keep id lists safely below.
+const MAX_IDS_PER_STATEMENT = 90;
+
+function markMessagesProcessed(
+  db: D1Database,
+  groupId: string,
+  messageIds: number[],
+  now: number,
+): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [];
+  for (let index = 0; index < messageIds.length; index += MAX_IDS_PER_STATEMENT) {
+    const ids = messageIds.slice(index, index + MAX_IDS_PER_STATEMENT);
+    statements.push(
+      db
+        .prepare(`UPDATE messages SET processed_at=? WHERE group_id=? AND id IN (${ids.map(() => "?").join(",")})`)
+        .bind(now, groupId, ...ids),
+    );
+  }
+  return statements;
+}
 const textEncoder = new TextEncoder();
 
 export async function loadWorkflowInput(
@@ -129,11 +149,14 @@ export async function persistWorkflowResult(
     .bind(input.groupId, input.periodStart, input.periodEnd)
     .first<number>("id");
   if (existing !== null) {
+    // Still consume the input: without this the same messages re-trigger a paid
+    // AI call every cron forever whenever the report period collides.
+    const consumed = markMessagesProcessed(db, input.groupId, input.messages.map((message) => message.id), now);
+    if (consumed.length > 0) await db.batch(consumed);
     await releaseGroupSummaryReservation(db, input.groupId, scheduledFor);
     return { created: false };
   }
 
-  const placeholders = input.messages.map(() => "?").join(",");
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -180,9 +203,7 @@ export async function persistWorkflowResult(
         now,
         input.groupId,
       ),
-    db
-      .prepare(`UPDATE messages SET processed_at=? WHERE group_id=? AND id IN (${placeholders})`)
-      .bind(now, input.groupId, ...input.messages.map((message) => message.id)),
+    ...markMessagesProcessed(db, input.groupId, input.messages.map((message) => message.id), now),
     db
       .prepare(
         `INSERT INTO audit_log(actor,action,entity_type,entity_id,before_json,after_json,created_at)

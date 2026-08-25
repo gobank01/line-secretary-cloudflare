@@ -1,5 +1,7 @@
 # Cloudflare LINE Secretary Implementation Plan
 
+> **หมายเหตุ (25 ส.ค. 2026):** เอกสารออกแบบฉบับเดิม — พฤติกรรมปัจจุบันเปลี่ยนแล้ว: บอทเงียบ 100% ไม่มีข้อความเปิดเผยตัว, cron รายชั่วโมง (`0 * * * *`), โมเดล `google/gemini-3.7-flash`, digest ปิดถาวร ดูสถานะจริงที่ README.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build and deploy a separate Cloudflare-native prototype that silently monitors 5–10 real LINE groups, demonstrates 100 seeded groups, summarizes new activity every 30 minutes, and exposes the approved action/category dashboard without Vercel.

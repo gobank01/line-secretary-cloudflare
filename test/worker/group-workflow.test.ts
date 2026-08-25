@@ -122,6 +122,43 @@ describe("group summarizer Workflow", () => {
     expect(bytes).toBeLessThan(256 * 1_024);
   });
 
+  it("chunks message updates below the D1 bound-parameter limit", async () => {
+    await env.DB.batch(
+      Array.from({ length: 120 }, (_, index) =>
+        env.DB.prepare(
+          `INSERT INTO messages(line_message_id,group_id,kind,text,sent_at,ingested_at,retention_expires_at)
+           VALUES(?,'C-workflow','text','ข้อความสั้น',?,?,?)`,
+        ).bind(`mw-chunk-${index}`, now - 10_000 + index, now, now + 99_999),
+      ),
+    );
+    const input = await loadWorkflowInput(env.DB, "C-workflow", 200, false, now);
+    expect(input?.messages.length).toBeGreaterThan(100);
+
+    await persistWorkflowResult(
+      env.DB,
+      input as NonNullable<typeof input>,
+      {
+        output: {
+          summary: "chunked",
+          actionItems: [],
+          unresolvedQuestions: [],
+          priorityScore: 10,
+          suggestedCategorySlug: "customer",
+          categoryConfidence: 0.9,
+        },
+        promptTokens: 1,
+        completionTokens: 1,
+        model: "test",
+      },
+      now,
+    );
+    expect(
+      await env.DB.prepare(
+        "SELECT count(*) AS count FROM messages WHERE group_id='C-workflow' AND processed_at IS NULL AND sent_at<=?",
+      ).bind(now).first("count"),
+    ).toBe(0);
+  });
+
   it("uses stable retryable steps and persists one idempotent report while preserving a locked category", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(validOpenRouterResponse());
     const observed: Array<{ name: string; config?: unknown }> = [];

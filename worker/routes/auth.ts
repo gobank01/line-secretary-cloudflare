@@ -39,7 +39,7 @@ authRoutes.post("/login", requireMutationOrigin, async (context) => {
 
   if (!(await passwordMatches(password, context.env.DASHBOARD_PASSWORD))) {
     const failure = await recordLoginFailure(context.env.DB, ipHash, now);
-    if (failure.attempts > 5) return context.json({ error: "too_many_attempts" }, 429);
+    if (failure.attempts >= 5) return context.json({ error: "too_many_attempts" }, 429);
     return context.json({ error: "invalid_credentials" }, 401);
   }
 

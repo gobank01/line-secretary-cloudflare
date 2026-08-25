@@ -20,7 +20,7 @@ export default function SystemStatus({ health, generatedAt }: SystemStatusProps)
       <div className="system-metrics">
         <span>คิวรอสรุป {health.backlogGroups} กลุ่ม</span>
         <span>AI วันนี้ {health.aiCallsToday} ครั้ง · {number.format(health.aiInputTokensToday)} tokens</span>
-        <span>LINE เดือนนี้ {health.linePushesMonth} / 280</span>
+        <span>LINE เดือนนี้ {health.linePushesMonth} / {health.linePushCap}</span>
         <span>
           Cron ล่าสุด {lastCron
             ? new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(lastCron)

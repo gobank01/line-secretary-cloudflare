@@ -46,6 +46,7 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
       .then((payload) => {
         if (!active) return;
         setData(payload);
+        alertCursor.current = Math.max(alertCursor.current, payload.generatedAt);
         setLoadError(false);
       })
       .catch((error: unknown) => {
@@ -100,8 +101,10 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     try {
       await logout();
       onUnauthorized();
-    } catch {
-      setLogoutError(true);
+    } catch (cause) {
+      // An expired session already means signed out.
+      if (cause instanceof ApiError && cause.status === 401) onUnauthorized();
+      else setLogoutError(true);
     }
   };
 

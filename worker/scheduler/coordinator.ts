@@ -26,8 +26,8 @@ export interface EligibleGroup {
   hasUrgentAlert: boolean;
 }
 
-// Cron fires on UTC :00/:30; the minute===0 gate assumes timeZone has a whole- or
-// half-hour UTC offset (a :45 offset like Asia/Kathmandu would never match a slot).
+// Cron fires hourly on UTC :00; the minute===0 gate assumes timeZone has a whole-hour
+// UTC offset (half-hour or :45 offsets would never match a slot).
 export function isDigestSlot(epochMs: number, timeZone = "Asia/Bangkok"): boolean {
   const local = localDateTimeParts(epochMs, timeZone);
   return (
@@ -122,7 +122,10 @@ async function runMaintenanceOnce(db: D1Database, scheduledTime: number, timeZon
 
 async function refreshFallbackGroupNames(db: D1Database, token: string, now: number): Promise<void> {
   const groups = await db
-    .prepare("SELECT source_id FROM groups WHERE data_mode='real' AND title LIKE 'กลุ่ม LINE • %' LIMIT 10")
+    .prepare(
+      `SELECT source_id FROM groups WHERE data_mode='real' AND active=1 AND left_at IS NULL
+       AND title LIKE 'กลุ่ม LINE • %' ORDER BY source_id LIMIT 10`,
+    )
     .all<{ source_id: string }>();
   for (const group of groups.results) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -180,7 +183,8 @@ export async function runScheduled(env: CoordinatorEnv, scheduledTime: number) {
     let dispatchedGroups = 0;
     for (const group of selected) {
       const acquiredAt = Date.now();
-      const workflowId = `${group.groupId}:${scheduledTime}`;
+      // Workflows instance ids must match ^[a-zA-Z0-9_][a-zA-Z0-9-_]*$ — a colon is rejected.
+      const workflowId = `${group.groupId}_${scheduledTime}`;
       const aiReservationId = crypto.randomUUID();
       const reserved = await reserveGroupSummary(
         env.DB,

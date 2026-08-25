@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import {
+import { ApiError,
   createCategory,
   deleteRawHistory,
   getAuditLog,
@@ -69,8 +69,14 @@ export default function GroupDetail({ groupId, categories, onClose, onChanged }:
       await action();
       await load();
       onChanged();
-    } catch {
-      setError("บันทึกไม่สำเร็จ ข้อมูลเดิมยังคงอยู่ กรุณาลองอีกครั้ง");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "real_group_limit") {
+        setError("เปิดกลุ่มไม่ได้: ครบโควตากลุ่มจริงแล้ว พักกลุ่มอื่นก่อน");
+      } else if (cause instanceof ApiError && cause.code === "slug_exists") {
+        setError("slug นี้มีอยู่แล้ว ใช้ชื่ออื่น");
+      } else {
+        setError("บันทึกไม่สำเร็จ ข้อมูลเดิมยังคงอยู่ กรุณาลองอีกครั้ง");
+      }
     } finally {
       setBusy(false);
     }

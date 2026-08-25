@@ -14,6 +14,7 @@ describe("system status", () => {
           aiCallsToday: 120,
           aiInputTokensToday: 500_000,
           linePushesMonth: 280,
+          linePushCap: 280,
           lastSuccessfulCron: Date.UTC(2026, 7, 23, 11, 30),
           platformMetrics: { source: "cloudflare_analytics", dashboardUrl: "https://dash.cloudflare.com/" },
           warnings: [

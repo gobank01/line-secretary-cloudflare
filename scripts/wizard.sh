@@ -165,16 +165,24 @@ doctor(){
 }
 
 # ---------- secrets ----------
-put_secret(){ # put_secret NAME env1 [env2...] — อ่านครั้งเดียว ไม่ echo ไม่ลง history
+put_secret(){ # put_secret NAME env1 [env2...] — อ่านครั้งเดียว ไม่ echo ไม่ลง history · fail = return 1
   local name="$1"; shift
-  local val
+  local val fail=0
   read -r -s -p "  ใส่ค่า $name (ไม่แสดงบนจอ): " val; echo
   [ -z "$val" ] && { warn "ข้าม $name" >&2; return 1; }
+  # worker ปฏิเสธรหัสสั้นกว่า 12 ตัว (MIN_PASSWORD_LENGTH) — กันตั้งแต่ต้นทาง
+  if [ "$name" = "DASHBOARD_PASSWORD" ] && [ "${#val}" -lt 12 ]; then
+    bad "DASHBOARD_PASSWORD ต้องยาวอย่างน้อย 12 ตัวอักษร (ใส่มา ${#val})" >&2; return 1
+  fi
   local e
   for e in "$@"; do
-    printf '%s' "$val" | wr secret put "$name" --env "$e" >/dev/null 2>&1 \
-      && ok "ตั้ง $name ที่ $e แล้ว" >&2 || bad "ตั้ง $name ที่ $e ไม่สำเร็จ" >&2
+    if printf '%s' "$val" | wr secret put "$name" --env "$e" >/dev/null 2>&1; then
+      ok "ตั้ง $name ที่ $e แล้ว" >&2
+    else
+      bad "ตั้ง $name ที่ $e ไม่สำเร็จ" >&2; fail=1
+    fi
   done
+  [ "$fail" = 1 ] && return 1
   printf '%s' "$val"  # ส่งกลับให้ caller ที่ต้องใช้ต่อ (เช่น curl LINE API)
 }
 
@@ -254,8 +262,9 @@ step mig-preview  "migrate preview" wr d1 migrations apply line-secretary-cloudf
 step seed-preview "seed demo preview" npm run seed:demo:preview
 if ! is_done sec-preview; then
   say "\n${c}▶ ตั้ง secret ของ preview${n}"
-  put_secret DASHBOARD_PASSWORD preview >/dev/null
-  openssl rand -base64 32 | wr secret put SESSION_SECRET --env preview >/dev/null && ok "สุ่ม SESSION_SECRET ให้แล้ว"
+  put_secret DASHBOARD_PASSWORD preview >/dev/null || { bad "ตั้ง DASHBOARD_PASSWORD ไม่สำเร็จ — รัน wizard ใหม่"; exit 1; }
+  openssl rand -base64 32 | wr secret put SESSION_SECRET --env preview >/dev/null || { bad "ตั้ง SESSION_SECRET ไม่สำเร็จ"; exit 1; }
+  ok "สุ่ม SESSION_SECRET ให้แล้ว"
   mark sec-preview
 fi
 step dep-preview "deploy preview + smoke test" deploy_env preview
@@ -266,8 +275,9 @@ step mig-prod  "migrate production" wr d1 migrations apply line-secretary-cloudf
 step seed-prod "seed demo production" npm run seed:demo:production
 if ! is_done sec-prod; then
   say "\n${c}▶ ตั้ง secret ของ production (ใช้รหัสคนละตัวกับ preview)${n}"
-  put_secret DASHBOARD_PASSWORD production >/dev/null
-  openssl rand -base64 32 | wr secret put SESSION_SECRET --env production >/dev/null && ok "สุ่ม SESSION_SECRET ให้แล้ว"
+  put_secret DASHBOARD_PASSWORD production >/dev/null || { bad "ตั้ง DASHBOARD_PASSWORD ไม่สำเร็จ — รัน wizard ใหม่"; exit 1; }
+  openssl rand -base64 32 | wr secret put SESSION_SECRET --env production >/dev/null || { bad "ตั้ง SESSION_SECRET ไม่สำเร็จ"; exit 1; }
+  ok "สุ่ม SESSION_SECRET ให้แล้ว"
   mark sec-prod
 fi
 step dep-prod "deploy production + smoke test" deploy_env production
@@ -276,7 +286,7 @@ PROD_URL="$(worker_url production)"; [ -n "$PROD_URL" ] && ok "production: $PROD
 head2 "8. OpenRouter"
 if ! is_done openrouter; then
   browser_step "https://openrouter.ai/keys" "สร้าง API key แล้วก็อปมาวางในขั้นถัดไป (ตั้งวงเงินที่ Settings → Credits ด้วย)" \
-    && { put_secret OPENROUTER_API_KEY preview production >/dev/null; mark openrouter; }
+    && put_secret OPENROUTER_API_KEY preview production >/dev/null && mark openrouter
 fi
 
 head2 "9. LINE Messaging API"
@@ -288,11 +298,12 @@ fi
 
 if ! is_done line-secrets; then
   say "\n${c}▶ ใส่ค่าจาก LINE console${n}"
-  put_secret LINE_CHANNEL_SECRET preview production >/dev/null
-  LINE_TOKEN="$(put_secret LINE_CHANNEL_ACCESS_TOKEN preview production | tail -1)"
+  SEC_OK=1
+  put_secret LINE_CHANNEL_SECRET preview production >/dev/null || SEC_OK=0
+  LINE_TOKEN="$(put_secret LINE_CHANNEL_ACCESS_TOKEN preview production)" || { SEC_OK=0; LINE_TOKEN=""; }
   say "  OWNER_USER_ID = LINE user id ของพี่เอง (ขึ้นต้น U...) ดูได้จาก LINE Developers → Basic settings → Your user ID"
-  put_secret OWNER_USER_ID preview production >/dev/null
-  mark line-secrets
+  put_secret OWNER_USER_ID preview production >/dev/null || SEC_OK=0
+  [ "$SEC_OK" = 1 ] && mark line-secrets || warn "secret LINE ยังไม่ครบ — รัน wizard ใหม่เพื่อใส่ซ้ำ"
 fi
 
 # ตั้ง webhook ผ่าน API แทนการคลิกในหน้าเว็บ — CLI ทำได้ก็ทำ
@@ -311,11 +322,15 @@ if ! is_done line-webhook; then
 fi
 if [ -n "${LINE_TOKEN:-}" ] && ! is_done line-webhook; then
   HOOK="$PROD_URL/api/line"
-  curl -sS -X PUT https://api.line.me/v2/bot/channel/webhook/endpoint \
-    -H "Authorization: Bearer $LINE_TOKEN" -H "Content-Type: application/json" \
-    -d "{\"endpoint\":\"$HOOK\"}" >/dev/null && ok "ตั้ง webhook = $HOOK"
-  RES="$(curl -sS -X POST https://api.line.me/v2/bot/channel/webhook/test \
-    -H "Authorization: Bearer $LINE_TOKEN" -H "Content-Type: application/json" -d "{\"endpoint\":\"$HOOK\"}")"
+  # token ส่งผ่าน stdin (-K -) ไม่โผล่ใน process list
+  CODE="$(printf 'header = "Authorization: Bearer %s"' "$LINE_TOKEN" | \
+    curl -sS -o /dev/null -w '%{http_code}' -K - -X PUT https://api.line.me/v2/bot/channel/webhook/endpoint \
+      -H "Content-Type: application/json" -d "{\"endpoint\":\"$HOOK\"}")"
+  if [ "$CODE" = "200" ]; then ok "ตั้ง webhook = $HOOK"
+  else bad "ตั้ง webhook ไม่สำเร็จ (HTTP $CODE) — เช็ค access token"; fi
+  RES="$(printf 'header = "Authorization: Bearer %s"' "$LINE_TOKEN" | \
+    curl -sS -K - -X POST https://api.line.me/v2/bot/channel/webhook/test \
+      -H "Content-Type: application/json" -d "{\"endpoint\":\"$HOOK\"}")"
   grep -q '"statusCode":200' <<<"$RES" && { ok "verify ผ่าน HTTP 200"; mark line-webhook; } \
     || { bad "verify ไม่ผ่าน: $RES"; say "  ตรวจว่า LINE_CHANNEL_SECRET ที่ใส่ตรงกับ channel เดียวกัน"; }
   unset LINE_TOKEN

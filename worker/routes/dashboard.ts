@@ -40,6 +40,7 @@ dashboardRoutes.get("/dashboard", async (context) => {
       aiCallCap: Number.parseInt(context.env.AI_DAILY_CALL_CAP, 10),
       aiInputTokenCap: Number.parseInt(context.env.AI_DAILY_INPUT_TOKEN_CAP, 10),
       linePushCap: Number.parseInt(context.env.AUTOMATED_MONTHLY_PUSH_CAP, 10),
+      aiMaxWaitMinutes: Number.parseInt(context.env.AI_MAX_WAIT_MINUTES, 10) || 120,
     }),
   ]);
   const payload: DashboardPayload = {
@@ -95,5 +96,6 @@ dashboardRoutes.get("/system/health", async (context) =>
     aiCallCap: Number.parseInt(context.env.AI_DAILY_CALL_CAP, 10),
     aiInputTokenCap: Number.parseInt(context.env.AI_DAILY_INPUT_TOKEN_CAP, 10),
     linePushCap: Number.parseInt(context.env.AUTOMATED_MONTHLY_PUSH_CAP, 10),
+    aiMaxWaitMinutes: Number.parseInt(context.env.AI_MAX_WAIT_MINUTES, 10) || 120,
   })),
 );

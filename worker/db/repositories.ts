@@ -110,8 +110,38 @@ export async function registerRealGroup(
   return { ...group, created: insertion.meta.changes === 1 };
 }
 
-export function recordGroupJoin(db: D1Database, sourceId: string, now: number): Promise<D1Result> {
-  return db
+export async function recordGroupJoin(
+  db: D1Database,
+  sourceId: string,
+  now: number,
+  activeLimit: number,
+): Promise<void> {
+  // A kicked group (left_at set) that gets re-invited should resume automatically
+  // when capacity allows; owner-paused groups (left_at NULL) stay paused.
+  const reactivated = await db
+    .prepare(
+      `UPDATE groups SET active = 1, updated_at = ?
+       WHERE source_id = ? AND data_mode = 'real' AND active = 0 AND left_at IS NOT NULL
+         AND (SELECT count(*) FROM groups WHERE data_mode = 'real' AND active = 1) < ?`,
+    )
+    .bind(now, sourceId, activeLimit)
+    .run();
+  if (reactivated.meta.changes === 0) {
+    const blocked = await db
+      .prepare("SELECT 1 AS one FROM groups WHERE source_id = ? AND data_mode = 'real' AND active = 0 AND left_at IS NOT NULL")
+      .bind(sourceId)
+      .first<number>("one");
+    if (blocked !== null) {
+      await db
+        .prepare(
+          `INSERT INTO alerts(group_id,message_id,kind,severity,status,excerpt,created_at)
+           VALUES(?,NULL,'real_group_limit','high','open',?,?)`,
+        )
+        .bind(sourceId, `บอทถูกเชิญกลับเข้ากลุ่ม แต่เปิดไม่ได้เพราะครบโควตา ${activeLimit} กลุ่มจริง`, now)
+        .run();
+    }
+  }
+  await db
     .prepare("UPDATE groups SET joined_at = COALESCE(joined_at, ?), left_at = NULL, updated_at = ? WHERE source_id = ?")
     .bind(now, now, sourceId)
     .run();
@@ -389,14 +419,16 @@ export async function getGroupDetail(db: D1Database, sourceId: string) {
       `SELECT g.source_id,g.title,g.data_mode,g.active,g.priority_score,g.last_message_at,g.last_summary_at,
         g.needs_category_review,g.category_locked,g.category_confidence,g.category_source,
         c.id AS category_id,c.slug AS category_slug,c.name AS category_name,
-        c.color AS category_color,NULL AS report_summary,NULL AS action_items_json,NULL AS unresolved_json,
+        c.color AS category_color,r.summary AS report_summary,r.action_items_json,r.unresolved_json,
         (SELECT count(*) FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved') AS open_alerts,
         (SELECT severity FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved'
          ORDER BY CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
          created_at,id LIMIT 1) AS highest_open_alert_severity,
         (SELECT min(created_at) FROM alerts a WHERE a.group_id=g.source_id AND a.status!='resolved') AS oldest_open_alert_at,
         (SELECT count(*) FROM messages m WHERE m.group_id=g.source_id) AS message_count
-       FROM groups g LEFT JOIN categories c ON c.id=g.category_id WHERE g.source_id=?`,
+       FROM groups g LEFT JOIN categories c ON c.id=g.category_id
+       LEFT JOIN reports r ON r.id=(SELECT id FROM reports WHERE group_id=g.source_id ORDER BY created_at DESC,id DESC LIMIT 1)
+       WHERE g.source_id=?`,
     )
     .bind(sourceId)
     .first<GroupSummaryRow & { message_count: number }>();
@@ -514,15 +546,18 @@ export async function getSystemHealth(
   db: D1Database,
   now: number,
   timeZone: string,
-  limits?: { aiCallCap: number; aiInputTokenCap: number; linePushCap: number },
+  limits?: { aiCallCap: number; aiInputTokenCap: number; linePushCap: number; aiMaxWaitMinutes?: number },
 ): Promise<DashboardHealthDto> {
   const date = localDateParts(now, timeZone);
   const [backlog, today, month, lastCron] = await Promise.all([
     db
       .prepare(
         `SELECT count(DISTINCT g.source_id) AS count FROM groups g JOIN messages m ON m.group_id=g.source_id
-         WHERE g.data_mode='real' AND g.active=1 AND m.processed_at IS NULL`,
+         WHERE g.data_mode='real' AND g.active=1 AND m.processed_at IS NULL AND m.sent_at<=?`,
       )
+      // A backlog is only "late" once a message has waited past the design wait
+      // (AI_MAX_WAIT_MINUTES) plus one hourly cron slack — fresh messages are normal.
+      .bind(now - ((limits?.aiMaxWaitMinutes ?? 120) + 60) * 60_000)
       .first<number>("count"),
     db
       .prepare("SELECT ai_calls,ai_input_tokens FROM usage_daily WHERE day=?")
@@ -553,6 +588,7 @@ export async function getSystemHealth(
     aiCallsToday,
     aiInputTokensToday,
     linePushesMonth,
+    linePushCap: limits?.linePushCap ?? 280,
     lastSuccessfulCron: lastCron ?? null,
     platformMetrics: { source: "cloudflare_analytics", dashboardUrl: "https://dash.cloudflare.com/" },
     warnings,

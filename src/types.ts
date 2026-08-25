@@ -52,6 +52,7 @@ export interface SystemHealth {
   aiCallsToday: number;
   aiInputTokensToday: number;
   linePushesMonth: number;
+  linePushCap: number;
   lastSuccessfulCron: number | null;
   platformMetrics: { source: "cloudflare_analytics"; dashboardUrl: string };
   warnings: string[];

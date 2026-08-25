@@ -92,7 +92,7 @@ describe("owner sessions", () => {
     expect(logout.headers.get("set-cookie")).toMatch(/owner_session=;.*Max-Age=0/);
   });
 
-  it("rate-limits the sixth wrong password and stores no raw IP", async () => {
+  it("rate-limits the fifth wrong password and stores no raw IP", async () => {
     const headers = {
       "content-type": "application/json",
       "cf-connecting-ip": "203.0.113.42",
@@ -104,7 +104,8 @@ describe("owner sessions", () => {
         headers,
         body: JSON.stringify({ password: "wrong-password" }),
       });
-      expect(response.status).toBe(401);
+      // The 5th failure sets the block and honestly answers 429, not 401.
+      expect(response.status).toBe(attempt < 4 ? 401 : 429);
     }
 
     const sixth = await request("/api/auth/login", {
@@ -133,7 +134,7 @@ describe("owner sessions", () => {
     expect(row?.blocked_until).toBe(now + 15 * 60 * 1_000);
   });
 
-  it("enforces the five-attempt allowance across concurrent HTTP requests", async () => {
+  it("enforces the four-attempt allowance across concurrent HTTP requests", async () => {
     const headers = {
       "content-type": "application/json",
       "cf-connecting-ip": "198.51.100.77",
@@ -149,7 +150,7 @@ describe("owner sessions", () => {
     );
     const statuses = responses.map((response) => response.status);
 
-    expect(statuses.filter((status) => status === 401)).toHaveLength(5);
-    expect(statuses.filter((status) => status === 429)).toHaveLength(3);
+    expect(statuses.filter((status) => status === 401)).toHaveLength(4);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(4);
   });
 });

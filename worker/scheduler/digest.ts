@@ -167,18 +167,26 @@ async function loadDigestContent(db: D1Database, cutoff: number) {
   return { alerts: alerts.results, reports: reports.results };
 }
 
-function updateIds(db: D1Database, table: "alerts" | "reports", ids: number[], now: number): D1PreparedStatement | null {
-  if (ids.length === 0) return null;
-  return db
-    .prepare(`UPDATE ${table} SET notified_at=? WHERE id IN (${ids.map(() => "?").join(",")})`)
-    .bind(now, ...ids);
-}
+// D1 allows at most 100 bound parameters per statement; chunk id lists safely below.
+const MAX_IDS_PER_STATEMENT = 90;
 
-function finalizeIds(db: D1Database, table: "alerts" | "reports", ids: number[], now: number): D1PreparedStatement | null {
-  if (ids.length === 0) return null;
-  return db
-    .prepare(`UPDATE ${table} SET digest_finalized_at=? WHERE id IN (${ids.map(() => "?").join(",")})`)
-    .bind(now, ...ids);
+function setColumnByIds(
+  db: D1Database,
+  table: "alerts" | "reports",
+  column: "notified_at" | "digest_finalized_at",
+  ids: number[],
+  now: number,
+): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [];
+  for (let index = 0; index < ids.length; index += MAX_IDS_PER_STATEMENT) {
+    const slice = ids.slice(index, index + MAX_IDS_PER_STATEMENT);
+    statements.push(
+      db
+        .prepare(`UPDATE ${table} SET ${column}=? WHERE id IN (${slice.map(() => "?").join(",")})`)
+        .bind(now, ...slice),
+    );
+  }
+  return statements;
 }
 
 const PUSH_RETRY_DELAYS_MS = [2_000, 5_000];
@@ -346,10 +354,10 @@ export async function runDigest(
         .bind(lastStatus === 0 ? "network_error" : `line_status_${lastStatus}`, deliveryId),
     ];
     if (!retryableFailure) {
-      const alertFinalization = finalizeIds(env.DB, "alerts", alertIds, scheduledTime);
-      const reportFinalization = finalizeIds(env.DB, "reports", reportIds, scheduledTime);
-      if (alertFinalization) failureStatements.push(alertFinalization);
-      if (reportFinalization) failureStatements.push(reportFinalization);
+      failureStatements.push(
+        ...setColumnByIds(env.DB, "alerts", "digest_finalized_at", alertIds, scheduledTime),
+        ...setColumnByIds(env.DB, "reports", "digest_finalized_at", reportIds, scheduledTime),
+      );
     }
     await env.DB.batch(failureStatements);
     return { status: "failed", deliveryId };
@@ -367,10 +375,10 @@ export async function runDigest(
        line_pushes=usage_daily.line_pushes+1,updated_at=excluded.updated_at`,
     ).bind(local.day, notifiedAt),
   ];
-  const alertUpdate = updateIds(env.DB, "alerts", alertIds, notifiedAt);
-  const reportUpdate = updateIds(env.DB, "reports", reportIds, notifiedAt);
-  if (alertUpdate) statements.push(alertUpdate);
-  if (reportUpdate) statements.push(reportUpdate);
+  statements.push(
+    ...setColumnByIds(env.DB, "alerts", "notified_at", alertIds, notifiedAt),
+    ...setColumnByIds(env.DB, "reports", "notified_at", reportIds, notifiedAt),
+  );
   await env.DB.batch(statements);
   return { status: "sent", deliveryId };
 }

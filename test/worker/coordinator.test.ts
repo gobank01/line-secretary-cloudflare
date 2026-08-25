@@ -128,7 +128,7 @@ describe("Bangkok coordinator schedule", () => {
     expect(create).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: `C-run:${monday0830}`,
+        id: `C-run_${monday0830}`,
         params: expect.objectContaining({
           groupId: "C-run",
           aiReservationId: expect.any(String),
