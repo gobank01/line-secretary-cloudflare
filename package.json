@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "wizard": "bash scripts/wizard.sh",
+    "wizard:check": "bash scripts/wizard.sh check",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:preview": "tsc -b && CLOUDFLARE_ENV=preview vite build && node scripts/assert-deploy-config.mjs preview",

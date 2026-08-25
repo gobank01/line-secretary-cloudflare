@@ -1,5 +1,24 @@
 # คู่มือติดตั้ง Cloudflare + LINE
 
+## ทางลัด: ใช้ wizard
+
+```bash
+bash scripts/wizard.sh check   # ตรวจ environment อย่างเดียว
+bash scripts/wizard.sh         # เดินครบทุกขั้น (resume ได้ ข้ามขั้นที่ผ่านแล้ว)
+```
+
+wizard ทำแทนขั้นที่ 1-5 ในคู่มือนี้เกือบทั้งหมด: ตรวจ environment (node/npm/npx/git/openssl/curl + python3/gh/jq + สถานะ login, D1, database_id, LINE_PUSH_ENABLED) → `npm ci` → login → สร้าง D1 สองชุด → ผูก `database_id` → typecheck + test → migrate/seed/secret/deploy/smoke ทั้ง preview และ production → ตั้ง LINE webhook + verify ผ่าน API
+
+**เบราว์เซอร์**: wizard บล็อก `open`/`xdg-open` ไว้ และสั่ง `wrangler login --browser=false` ทุกลิงก์ที่ต้องเปิด (Cloudflare OAuth, OpenRouter keys, LINE Developers Console) จะพิมพ์ URL ออกมาให้เปิดใน **Claude app Browser pane หรือ Codex app browser** เท่านั้น
+
+**Secret**: รับด้วย `read -s` แล้ว pipe เข้า `wrangler secret put` ไม่ผ่าน argv ไม่ลง shell history ไม่ขึ้นจอ
+
+สถานะเก็บที่ `.generated/wizard-state` — ล้างด้วย `bash scripts/wizard.sh reset` ตรวจ logic ตัว wizard เองด้วย `bash scripts/wizard.sh selftest`
+
+ขั้นที่ wizard ทำแทนไม่ได้ (ไม่มี API): สร้าง LINE channel, เปิด "Allow bot to join group chats", เชิญบอทเข้ากลุ่ม, เปิด `LINE_PUSH_ENABLED` หลังทดสอบผ่าน — อ่านรายละเอียดต่อด้านล่าง
+
+---
+
 คู่มือนี้แยก `preview` และ `production` คนละ Worker, D1, Workflow และ secrets ตั้งแต่ต้น ทุกขั้นตอนเริ่มด้วย `LINE_PUSH_ENABLED=false`
 
 ## 1. ตรวจเครื่องมือและ login
