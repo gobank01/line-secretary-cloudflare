@@ -123,16 +123,11 @@ Cloudflare Vite plugin เลือก environment ตอน build จึงห�
 
 หากต้องหยุดฉุกเฉิน ให้เปลี่ยนกลับเป็น `"false"` แล้ว deploy production ใหม่ การดู dashboard และรับ webhook จะยังทำงานต่อ
 
-## 7. GitHub repo แยก
+## 7. GitHub repo
 
-สร้างเป็น private repository เท่านั้น:
+repo นี้เผยแพร่เป็น public (MIT) สำหรับผู้เรียน — ห้าม commit ค่า secret ใดๆ ลง repo เด็ดขาด (`.dev.vars`, token, database id ที่เป็นของจริง) ตรวจด้วย `git ls-files | xargs grep -l "sk-or-"` ก่อน push ทุกครั้ง
 
-```bash
-gh repo view gobank01/line-secretary-cloudflare
-gh repo create gobank01/line-secretary-cloudflare --private --source . --remote origin --push
-```
-
-ถ้าชื่อ repo มีอยู่แล้ว ให้หยุดและตรวจ remote ห้าม force-push หรือเขียนทับ repo เดิม
+ถ้า fork ไปใช้เอง: ตั้ง secrets ผ่าน `wrangler secret put` เท่านั้น และรัน `scripts/configure-cloudflare.mjs` เพื่อผูก D1 ของบัญชีตัวเอง
 
 ## Production checklist
 

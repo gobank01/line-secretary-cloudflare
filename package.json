@@ -31,7 +31,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "description": "",
   "dependencies": {
     "hono": "^4.13.3",
