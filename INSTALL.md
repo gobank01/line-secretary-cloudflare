@@ -29,7 +29,7 @@ Cloudflare ให้ URL ฟรีแบบเดียวกับ `.vercel.app
 
 - **ไม่มี prompt / error "register a workers.dev subdomain"** → รัน `CLOUDFLARE_ENV=preview npx wrangler deploy` ใน terminal ตรงๆ หนึ่งครั้งเพื่อให้ prompt โผล่
 - **สอนเป็นกลุ่ม/ห้องเรียน**: อย่าให้ทุกคนสมัครบัญชี Cloudflare พร้อมกันจาก WiFi เดียวกัน — ระบบ anti-abuse อาจมองเป็นบอทแล้วธงทั้งกลุ่ม ให้สมัคร + ยืนยันอีเมลจากบ้านเป็นการบ้านก่อนเข้าเรียน
-- **แถบแดง "You cannot register a workers.dev subdomain"** ใน dashboard → บัญชีโดนธงจากระบบ ต้องเมล abusereply@cloudflare.com แนบ Account ID ขอปลดล็อก (เจอได้กับบัญชีเก่าที่ไม่เคยใช้ Workers — ตอบใน 1-3 วัน) หรือสมัครบัญชีใหม่อีเมลอื่น
+- **แถบแดง "You cannot register a workers.dev subdomain"** ใน dashboard → บัญชีโดนธงจากระบบ ต้องเมล abusereply@cloudflare.com แนบ Account ID ขอปลดล็อก (เจอได้กับบัญชีเก่าที่ไม่เคยใช้ Workers — ตอบใน 1-3 วัน) หรือสมัครบัญชีใหม่อีเมลอื่น — หรือใช้ทางสำรอง Vercel ตาม [INSTALL-VERCEL.md](./INSTALL-VERCEL.md) ได้ทันทีระหว่างรอ
 
 ## 1. ตรวจเครื่องมือและ login
 

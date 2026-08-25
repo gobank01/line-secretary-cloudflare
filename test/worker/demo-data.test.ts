@@ -15,12 +15,13 @@ describe("demo dataset", () => {
     expect(first.reports).toHaveLength(100);
   });
 
-  it("renders a demo-only reseed transaction", () => {
+  it("renders a demo-only reseed without explicit transactions", () => {
     const sql = renderDemoSeedSql(buildDemoDataset(3, 20_260_823));
 
     expect(sql).toContain("DELETE FROM groups WHERE data_mode = 'demo'");
     expect(sql.match(/INSERT INTO groups/g)).toHaveLength(3);
     expect(sql).not.toContain("DELETE FROM groups WHERE data_mode = 'real'");
-    expect(sql).toContain("COMMIT;");
+    // Remote D1 rejects explicit BEGIN/COMMIT — the file must stay transaction-free.
+    expect(sql).not.toMatch(/BEGIN TRANSACTION|COMMIT;/);
   });
 });

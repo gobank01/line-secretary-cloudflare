@@ -46,6 +46,10 @@ wizard ตรวจเครื่องมือครบชุด (node ≥20.
 
 ขั้นที่ต้องทำมือ (ไม่มี API): สร้าง LINE OA + Messaging API channel, เปิด "Allow bot to join group chats", เชิญบอทเข้ากลุ่ม — รายละเอียดใน [INSTALL.md](./INSTALL.md)
 
+## ทางสำรอง: Vercel (เมื่อบัญชี Cloudflare โดนล็อก)
+
+บัญชีส่วนน้อย (~1-2%) เจอแถบแดง "cannot register a workers.dev subdomain" ซึ่งล็อกทั้ง workers.dev และ pages.dev — ระหว่างรอ Cloudflare ปลดล็อก ใช้ทางสำรองได้ทันที: **โค้ดชุดเดียวกัน** รันบน Vercel + Turso (SQLite ฟรี) + cron-job.org (รายชั่วโมงฟรี) ผ่าน adapter ใน `vercel-adapter/` — ดูขั้นตอนเต็มใน [INSTALL-VERCEL.md](./INSTALL-VERCEL.md) และทดสอบเครื่องตัวเองด้วย `npm run smoke:vercel`
+
 ## ขอบเขต Free tier ที่ออกแบบไว้
 
 โครงสร้างใช้ Workers Free, Static Assets, D1 และ Workflows โดยปริมาณ 100 กลุ่มจำลอง + 10 กลุ่มจริงออกแบบให้อยู่ต่ำกว่าโควตาหลัก — ไม่ใช่คำรับประกันว่าจะฟรีตลอดไป เพราะโควตาผู้ให้บริการเปลี่ยนได้และ Free plan ไม่มี SLA

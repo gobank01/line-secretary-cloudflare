@@ -2,7 +2,7 @@ import { createApp } from "./app";
 import type { AppEnv } from "./env";
 import { runScheduled } from "./scheduler/coordinator";
 
-export { GroupSummarizer } from "./workflows/group-summarizer";
+export { GroupSummarizer } from "./workflows/entry";
 
 const app = createApp();
 

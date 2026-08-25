@@ -104,8 +104,16 @@ lineRoutes.post("/", async (context) => {
   const loweredAlertWords = events.some((event) => event.type === "text")
     ? (await getAlertWords(context.env.DB)).map((word) => word.toLocaleLowerCase("th"))
     : [];
+  // Vercel adapter has no executionCtx; background name refresh then degrades
+  // to a floating promise that the next cron retries anyway.
+  let executionContext: { waitUntil(promise: Promise<unknown>): void };
+  try {
+    executionContext = context.executionCtx;
+  } catch {
+    executionContext = { waitUntil: () => {} };
+  }
   for (const event of events) {
-    await handleEvent(event, context.env, context.executionCtx, loweredAlertWords);
+    await handleEvent(event, context.env, executionContext, loweredAlertWords);
   }
   return context.json({ ok: true });
 });

@@ -17,10 +17,14 @@ authRoutes.post("/login", requireMutationOrigin, async (context) => {
   if (!authConfigurationValid(context.env.DASHBOARD_PASSWORD, context.env.SESSION_SECRET)) {
     return context.json({ error: "authentication_unavailable" }, 503);
   }
-  const ipHash = await hashLoginIp(
-    context.req.header("cf-connecting-ip") ?? "unknown",
-    context.env.SESSION_SECRET,
-  );
+  // Cloudflare ให้ cf-connecting-ip; บน Vercel ใช้ x-real-ip / x-forwarded-for แทน
+  // ไม่งั้นทุกคนตกถังเดียวกันแล้วล็อกกันเองทั้งเว็บ
+  const clientIp =
+    context.req.header("cf-connecting-ip") ??
+    context.req.header("x-real-ip") ??
+    context.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown";
+  const ipHash = await hashLoginIp(clientIp, context.env.SESSION_SECRET);
   const now = Date.now();
   if (await isLoginBlocked(context.env.DB, ipHash, now)) {
     return context.json({ error: "too_many_attempts" }, 429);

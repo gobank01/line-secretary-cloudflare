@@ -1,12 +1,12 @@
-import {
-  WorkflowEntrypoint,
-  type WorkflowEvent,
-  type WorkflowStep,
-  type WorkflowStepConfig,
-} from "cloudflare:workers";
 import { releaseAiCallSlot, summarizeGroup } from "../ai/openrouter";
 import type { SummaryOutputValue } from "../ai/schema";
 import type { AppEnv, GroupSummarizerParams } from "../env";
+
+// This module stays runtime-agnostic (no cloudflare:workers import) so the
+// Vercel adapter can reuse it; the WorkflowEntrypoint class lives in entry.ts.
+export interface WorkflowStepConfigLike {
+  retries?: { limit: number; delay: string | number; backoff?: string };
+}
 
 export interface WorkflowInput {
   groupId: string;
@@ -28,7 +28,7 @@ export interface WorkflowResult {
 export interface WorkflowStepRunner {
   do<T>(
     name: string,
-    configOrCallback: WorkflowStepConfig | (() => Promise<T>),
+    configOrCallback: WorkflowStepConfigLike | (() => Promise<T>),
     maybeCallback?: () => Promise<T>,
   ): Promise<T>;
 }
@@ -262,8 +262,4 @@ export async function runGroupSummarizerSteps(
   return { status: "complete" };
 }
 
-export class GroupSummarizer extends WorkflowEntrypoint<AppEnv, GroupSummarizerParams> {
-  async run(event: Readonly<WorkflowEvent<GroupSummarizerParams>>, step: WorkflowStep): Promise<unknown> {
-    return runGroupSummarizerSteps(this.env, event.payload, step as unknown as WorkflowStepRunner);
-  }
-}
+
