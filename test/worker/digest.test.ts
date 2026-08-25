@@ -73,6 +73,8 @@ async function seedDigestContent(): Promise<{ reportId: number; demoReportId: nu
   };
 }
 
+const noSleep = () => Promise.resolve();
+
 describe("guarded LINE digest", () => {
   it("returns disabled before reserving a delivery and skips empty content", async () => {
     await expect(runDigest(digestEnv({ LINE_PUSH_ENABLED: "false" }), slot)).resolves.toEqual({ status: "disabled" });
@@ -120,7 +122,7 @@ describe("guarded LINE digest", () => {
         return Response.json({}, { status: 200 });
       });
 
-    await expect(runDigest(digestEnv(), slot)).resolves.toMatchObject({ status: "sent" });
+    await expect(runDigest(digestEnv(), slot, noSleep)).resolves.toMatchObject({ status: "sent" });
     expect(retryKeys).toHaveLength(2);
     expect(new Set(retryKeys).size).toBe(1);
   });
@@ -133,7 +135,7 @@ describe("guarded LINE digest", () => {
       return Response.json({}, { status: 500 });
     });
 
-    await expect(runDigest(digestEnv(), slot)).resolves.toMatchObject({ status: "failed" });
+    await expect(runDigest(digestEnv(), slot, noSleep)).resolves.toMatchObject({ status: "failed" });
     const persistedKey = await env.DB.prepare("SELECT retry_key FROM digest_deliveries")
       .first<string>("retry_key");
 
@@ -141,7 +143,7 @@ describe("guarded LINE digest", () => {
       retryKeys.push(new Headers(init?.headers).get("x-line-retry-key"));
       return Response.json({}, { status: 200 });
     });
-    await expect(runDigest(digestEnv(), slot + 60 * 60_000)).resolves.toMatchObject({ status: "sent" });
+    await expect(runDigest(digestEnv(), slot + 60 * 60_000, noSleep)).resolves.toMatchObject({ status: "sent" });
 
     expect(retryKeys).toHaveLength(4);
     expect(new Set(retryKeys)).toEqual(new Set([persistedKey]));
@@ -250,7 +252,7 @@ describe("guarded LINE digest", () => {
   it("counts a cross-day retry against the actual send day before allowing another push", async () => {
     await seedDigestContent();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({}, { status: 500 }));
-    await expect(runDigest(digestEnv(), slot)).resolves.toMatchObject({ status: "failed" });
+    await expect(runDigest(digestEnv(), slot, noSleep)).resolves.toMatchObject({ status: "failed" });
 
     const nextDay = slot + 24 * 60 * 60_000;
     await env.DB.batch(

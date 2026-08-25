@@ -45,6 +45,9 @@ describe("Bangkok coordinator schedule", () => {
     expect(isDigestSlot(bangkokEpoch("2026-08-24 08:30"))).toBe(false);
     expect(isDigestSlot(bangkokEpoch("2026-08-23 08:00"))).toBe(false);
     expect(isDigestSlot(bangkokEpoch("2026-08-24 18:00"))).toBe(false);
+    // 08:00 Bangkok = 01:00 UTC — the slot gate must follow the configured zone.
+    expect(isDigestSlot(bangkokEpoch("2026-08-24 08:00"), "UTC")).toBe(false);
+    expect(isDigestSlot(bangkokEpoch("2026-08-24 15:00"), "UTC")).toBe(true);
   });
 
   it("selects urgent then oldest eligible real groups and excludes demo data", async () => {

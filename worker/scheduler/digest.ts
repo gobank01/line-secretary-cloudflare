@@ -181,7 +181,14 @@ function finalizeIds(db: D1Database, table: "alerts" | "reports", ids: number[],
     .bind(now, ...ids);
 }
 
-export async function runDigest(env: DigestEnv, scheduledTime: number): Promise<{ status: string; deliveryId?: number }> {
+const PUSH_RETRY_DELAYS_MS = [2_000, 5_000];
+const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export async function runDigest(
+  env: DigestEnv,
+  scheduledTime: number,
+  sleep: (ms: number) => Promise<void> = realSleep,
+): Promise<{ status: string; deliveryId?: number }> {
   if (env.LINE_PUSH_ENABLED !== "true") return { status: "disabled" };
 
   const local = localDateTimeParts(scheduledTime, env.APP_TIMEZONE);
@@ -314,6 +321,8 @@ export async function runDigest(env: DigestEnv, scheduledTime: number): Promise<
   let requestId: string | null = null;
   let accepted = false;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    // Back off between attempts so a LINE 429/5xx is not hammered three times in a row.
+    if (attempt > 0) await sleep(PUSH_RETRY_DELAYS_MS[attempt - 1] ?? 5_000);
     try {
       const result = await pushDigest(env.OWNER_USER_ID, text, retryKey, env.LINE_CHANNEL_ACCESS_TOKEN);
       lastStatus = result.status;

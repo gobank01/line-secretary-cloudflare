@@ -68,19 +68,27 @@ export async function loadWorkflowInput(
   const categorySlugs = categories.results.map((category) => category.slug);
   const previousSummary = previousReport?.summary ?? null;
   const boundedMessages: WorkflowInput["messages"] = [];
-  for (const message of messages.results) {
-    const mapped = { id: message.id, text: message.text, sentAt: message.sent_at };
-    const candidateMessages = [...boundedMessages, mapped];
-    const candidate: WorkflowInput = {
+  // Accumulate serialized bytes incrementally instead of re-stringifying the whole
+  // candidate per message (O(n) vs O(n^2), which risked the Workers CPU limit).
+  // The envelope is sized with MAX_SAFE_INTEGER periods and each message adds one
+  // separator byte, so for LINE's positive integer-ms timestamps the estimate only
+  // overshoots the real payload; either way ~800KB headroom remains to the 1 MiB step limit.
+  let payloadBytes = textEncoder.encode(
+    JSON.stringify({
       groupId,
       title: group.title,
       categorySlugs,
       previousSummary,
-      messages: candidateMessages,
-      periodStart: candidateMessages[0]?.sentAt ?? 0,
-      periodEnd: candidateMessages.at(-1)?.sentAt ?? 0,
-    };
-    if (textEncoder.encode(JSON.stringify(candidate)).byteLength > WORKFLOW_INPUT_BYTE_LIMIT) break;
+      messages: [],
+      periodStart: Number.MAX_SAFE_INTEGER,
+      periodEnd: Number.MAX_SAFE_INTEGER,
+    }),
+  ).byteLength;
+  for (const message of messages.results) {
+    const mapped = { id: message.id, text: message.text, sentAt: message.sent_at };
+    const messageBytes = textEncoder.encode(JSON.stringify(mapped)).byteLength + 1;
+    if (payloadBytes + messageBytes > WORKFLOW_INPUT_BYTE_LIMIT) break;
+    payloadBytes += messageBytes;
     boundedMessages.push(mapped);
   }
   if (boundedMessages.length === 0) return null;

@@ -41,6 +41,7 @@ async function handleEvent(
   event: LineGroupEvent,
   env: AppEnv,
   executionContext: { waitUntil(promise: Promise<unknown>): void },
+  loweredAlertWords: string[],
 ): Promise<void> {
   if (event.type === "leave") {
     await markGroupLeft(env.DB, event.groupId, event.timestamp);
@@ -90,8 +91,8 @@ async function handleEvent(
   if (insertion.meta.changes !== 1) return;
 
   await updateGroupLastMessage(env.DB, event.groupId, event.timestamp);
-  const alertWords = await getAlertWords(env.DB);
-  if (alertWords.some((word) => event.text.toLocaleLowerCase("th").includes(word.toLocaleLowerCase("th")))) {
+  const loweredText = event.text.toLocaleLowerCase("th");
+  if (loweredAlertWords.some((word) => loweredText.includes(word))) {
     await insertKeywordAlert(env.DB, event.messageId, event.groupId, event.text.slice(0, 240), Date.now());
   }
 }
@@ -115,8 +116,12 @@ lineRoutes.post("/", async (context) => {
     throw error;
   }
 
+  // Alert words change rarely; load them once per webhook batch instead of per message.
+  const loweredAlertWords = events.some((event) => event.type === "text")
+    ? (await getAlertWords(context.env.DB)).map((word) => word.toLocaleLowerCase("th"))
+    : [];
   for (const event of events) {
-    await handleEvent(event, context.env, context.executionCtx);
+    await handleEvent(event, context.env, context.executionCtx, loweredAlertWords);
   }
   return context.json({ ok: true });
 });

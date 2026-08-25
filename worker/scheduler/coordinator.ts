@@ -26,8 +26,10 @@ export interface EligibleGroup {
   hasUrgentAlert: boolean;
 }
 
-export function isDigestSlot(epochMs: number): boolean {
-  const local = localDateTimeParts(epochMs, "Asia/Bangkok");
+// Cron fires on UTC :00/:30; the minute===0 gate assumes timeZone has a whole- or
+// half-hour UTC offset (a :45 offset like Asia/Kathmandu would never match a slot).
+export function isDigestSlot(epochMs: number, timeZone = "Asia/Bangkok"): boolean {
+  const local = localDateTimeParts(epochMs, timeZone);
   return (
     local.minute === 0 &&
     local.hour >= 8 &&
@@ -222,7 +224,9 @@ export async function runScheduled(env: CoordinatorEnv, scheduledTime: number) {
     }
 
     let digestStatus: string | undefined;
-    if (isDigestSlot(scheduledTime)) digestStatus = (await runDigest(env, scheduledTime)).status;
+    if (isDigestSlot(scheduledTime, env.APP_TIMEZONE)) {
+      digestStatus = (await runDigest(env, scheduledTime)).status;
+    }
     await env.DB.prepare(
       "UPDATE job_runs SET status='dispatched',groups_selected=?,completed_at=? WHERE id=?",
     )
