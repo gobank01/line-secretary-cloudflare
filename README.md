@@ -42,6 +42,8 @@ wizard ตรวจเครื่องมือครบชุด (node ≥20.
 - **Secrets**: รับด้วย `read -s` แล้ว pipe ตรงเข้า `wrangler secret put` — ไม่ผ่าน argv, ไม่ลง shell history, token LINE ส่งเข้า curl ทาง stdin ไม่โผล่ใน process list
 - สถานะอยู่ที่ `.generated/wizard-state` — `reset` เพื่อเริ่มใหม่, `selftest` ตรวจ logic ตัว wizard เอง
 
+**บัญชี Cloudflare ใหม่**: deploy ครั้งแรก wrangler จะถามตั้งชื่อ workers.dev subdomain ของบัญชี (ครั้งเดียว ได้ URL ฟรีแบบเดียวกับ .vercel.app) — ถ้าติดแถบแดง "cannot register" ดูวิธีแก้ใน INSTALL.md ข้อ 0
+
 ขั้นที่ต้องทำมือ (ไม่มี API): สร้าง LINE OA + Messaging API channel, เปิด "Allow bot to join group chats", เชิญบอทเข้ากลุ่ม — รายละเอียดใน [INSTALL.md](./INSTALL.md)
 
 ## ขอบเขต Free tier ที่ออกแบบไว้
