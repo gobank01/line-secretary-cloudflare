@@ -186,7 +186,13 @@ deploy_env(){ # deploy 2 รอบ: รอบแรกได้ URL รอบส
   node scripts/smoke-worker.mjs ".generated/$e-deploy-final.log"
 }
 
-worker_url(){ grep -oE 'https://[a-z0-9.-]+\.workers\.dev' ".generated/$1-deploy-final.log" 2>/dev/null | tail -1; }
+worker_url(){
+  local f
+  for f in ".generated/$1-deploy-final.log" ".generated/$1-deploy.log"; do
+    [ -f "$f" ] || continue
+    grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$f" | tail -1 && return 0
+  done
+}
 
 # ---------- selftest ----------
 selftest(){
@@ -290,8 +296,20 @@ if ! is_done line-secrets; then
 fi
 
 # ตั้ง webhook ผ่าน API แทนการคลิกในหน้าเว็บ — CLI ทำได้ก็ทำ
-if [ -n "${LINE_TOKEN:-}" ] && [ -n "$PROD_URL" ] && ! is_done line-webhook; then
+if ! is_done line-webhook; then
   head2 "10. ตั้ง webhook (ผ่าน LINE API ไม่ต้องคลิกในหน้าเว็บ)"
+  if [ -z "$PROD_URL" ]; then
+    bad "ยังไม่รู้ URL ของ production (ไม่มี .generated/production-deploy*.log)"
+    say "  รัน 'bash scripts/wizard.sh reset' หรือ 'npm run deploy:production' ใหม่ก่อน แล้วค่อยรัน wizard อีกรอบ"
+    exit 1
+  fi
+  if [ -z "${LINE_TOKEN:-}" ]; then
+    say "  ต้องใช้ channel access token อีกครั้งเพื่อยิง API (ไม่ถูกเก็บลงไฟล์ ใช้แล้วทิ้ง)"
+    read -r -s -p "  ใส่ค่า LINE_CHANNEL_ACCESS_TOKEN (ไม่แสดงบนจอ): " LINE_TOKEN; echo
+    [ -z "$LINE_TOKEN" ] && { warn "ข้าม — ตั้ง webhook เองที่ LINE console: $PROD_URL/api/line"; LINE_TOKEN=""; }
+  fi
+fi
+if [ -n "${LINE_TOKEN:-}" ] && ! is_done line-webhook; then
   HOOK="$PROD_URL/api/line"
   curl -sS -X PUT https://api.line.me/v2/bot/channel/webhook/endpoint \
     -H "Authorization: Bearer $LINE_TOKEN" -H "Content-Type: application/json" \
