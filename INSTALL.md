@@ -101,7 +101,7 @@ npx wrangler secret put OPENROUTER_API_KEY --env production
 2. กำหนด Webhook URL เป็น `https://<production-worker>.workers.dev/api/line`
 3. กด Verify และยืนยันว่าได้ HTTP 200
 4. เปิด Use webhook
-5. ทดสอบเชิญบอทเข้ากลุ่มทดลองหนึ่งกลุ่ม ต้องมีข้อความเปิดเผยตัวหนึ่งครั้ง
+5. ทดสอบเชิญบอทเข้ากลุ่มทดลองหนึ่งกลุ่ม บอทต้องไม่ส่งข้อความใดๆ เลย
 6. ส่งข้อความธรรมดาในกลุ่มและยืนยันว่าบอทเงียบ แต่ dashboard เห็นกิจกรรม
 
 LINE ระบุว่า group message webhook มี `groupId` และต้องตรวจ signature; โปรเจกต์นี้ทำทั้งสองส่วนแล้ว อ้างอิง [group chats](https://developers.line.biz/en/docs/messaging-api/group-chats/) และ [receiving webhooks](https://developers.line.biz/en/docs/messaging-api/receiving-messages/)
@@ -141,7 +141,7 @@ gh repo create gobank01/line-secretary-cloudflare --private --source . --remote 
 - [ ] Secrets อยู่ใน Wrangler secrets เท่านั้น
 - [ ] `LINE_PUSH_ENABLED=false` จนกว่าจะ smoke test LINE จริงผ่าน
 - [ ] LINE webhook เป็น HTTPS production URL และ Verify ผ่าน
-- [ ] กลุ่มทดลองได้รับ disclosure ครั้งเดียว ข้อความทั่วไปไม่มี reply
+- [ ] บอทไม่ส่งข้อความใดๆ ในกลุ่มทดลอง (เข้ากลุ่ม/ข้อความทั่วไป ต้องเงียบทั้งหมด)
 - [ ] มี owner user ID เพียงคนเดียวสำหรับ digest
 - [ ] ตรวจ Cloudflare Analytics, D1 row metrics, Workflow steps และ LINE monthly usage
 - [ ] ทดสอบ pause group และ emergency disable

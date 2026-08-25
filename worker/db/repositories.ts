@@ -57,17 +57,16 @@ export function insertMessage(db: D1Database, message: NewMessage): Promise<D1Re
 export async function findGroup(db: D1Database, sourceId: string): Promise<GroupRecord | null> {
   const row = await db
     .prepare(
-      `SELECT source_id, title, active, disclosure_sent_at
+      `SELECT source_id, title, active
        FROM groups WHERE source_id = ? AND data_mode = 'real'`,
     )
     .bind(sourceId)
-    .first<{ source_id: string; title: string; active: number; disclosure_sent_at: number | null }>();
+    .first<{ source_id: string; title: string; active: number }>();
   if (!row) return null;
   return {
     sourceId: row.source_id,
     title: row.title,
     active: row.active === 1,
-    disclosureSentAt: row.disclosure_sent_at,
   };
 }
 
@@ -125,33 +124,8 @@ export function markGroupLeft(db: D1Database, sourceId: string, now: number): Pr
     .run();
 }
 
-export function markDisclosureSent(db: D1Database, sourceId: string, now: number): Promise<D1Result> {
-  return db
-    .prepare(
-      `UPDATE groups SET disclosure_sent_at=?,disclosure_claimed_at=NULL,updated_at=?
-       WHERE source_id=? AND disclosure_sent_at IS NULL`,
-    )
-    .bind(now, now, sourceId)
-    .run();
-}
 
-export async function claimDisclosure(db: D1Database, sourceId: string, now: number): Promise<boolean> {
-  const result = await db.prepare(
-    `UPDATE groups SET disclosure_claimed_at=? WHERE source_id=? AND disclosure_sent_at IS NULL
-     AND (disclosure_claimed_at IS NULL OR disclosure_claimed_at<=?)`,
-  )
-    .bind(now, sourceId, now - 2 * 60_000)
-    .run();
-  return result.meta.changes === 1;
-}
 
-export function releaseDisclosureClaim(db: D1Database, sourceId: string, claimedAt: number): Promise<D1Result> {
-  return db.prepare(
-    "UPDATE groups SET disclosure_claimed_at=NULL WHERE source_id=? AND disclosure_claimed_at=? AND disclosure_sent_at IS NULL",
-  )
-    .bind(sourceId, claimedAt)
-    .run();
-}
 
 export function updateGroupTitle(db: D1Database, sourceId: string, title: string, now: number): Promise<D1Result> {
   return db

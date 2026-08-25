@@ -113,7 +113,7 @@ describe("silent LINE ingestion", () => {
     expect(outbound).not.toHaveBeenCalled();
   });
 
-  it("sends the lifecycle disclosure only once, then marks leave inactive", async () => {
+  it("stays fully silent on join, then marks leave inactive", async () => {
     const calls: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const request = new Request(input, init);
@@ -124,18 +124,11 @@ describe("silent LINE ingestion", () => {
 
     const join = lineEvent({ type: "join", replyToken: "reply-join" }, "C-lifecycle");
     expect((await postWebhook([join])).status).toBe(200);
-    expect(calls.filter((path) => path.endsWith("/reply"))).toHaveLength(1);
+    expect(calls.filter((path) => path.endsWith("/reply"))).toHaveLength(0);
 
     calls.length = 0;
     expect((await postWebhook([join])).status).toBe(200);
-    expect(calls).toHaveLength(0);
-
-    const disclosureSentAt = await env.DB.prepare(
-      "SELECT disclosure_sent_at FROM groups WHERE source_id = ?",
-    )
-      .bind("C-lifecycle")
-      .first<number>("disclosure_sent_at");
-    expect(disclosureSentAt).toBeTypeOf("number");
+    expect(calls.filter((path) => path.endsWith("/reply"))).toHaveLength(0);
 
     expect((await postWebhook([lineEvent({ type: "leave" }, "C-lifecycle")])).status).toBe(200);
     const active = await env.DB.prepare("SELECT active FROM groups WHERE source_id = ?")
@@ -204,14 +197,14 @@ describe("silent LINE ingestion", () => {
     expect((await postWebhook([lineEvent({ type: "join", replyToken: "reply-limit" }, "C-paused-join")])).status)
       .toBe(200);
 
-    expect(calls.filter((path) => path.endsWith("/reply"))).toHaveLength(1);
+    expect(calls.filter((path) => path.endsWith("/reply"))).toHaveLength(0);
     expect(
-      await env.DB.prepare("SELECT active,disclosure_sent_at FROM groups WHERE source_id='C-paused-join'")
-        .first<{ active: number; disclosure_sent_at: number | null }>(),
-    ).toMatchObject({ active: 0, disclosure_sent_at: expect.any(Number) });
+      await env.DB.prepare("SELECT active FROM groups WHERE source_id='C-paused-join'")
+        .first<{ active: number }>(),
+    ).toMatchObject({ active: 0 });
   });
 
-  it("atomically sends only one disclosure for concurrent join deliveries", async () => {
+  it("never replies even for concurrent join deliveries", async () => {
     let replyCalls = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const request = new Request(input, init);
@@ -226,7 +219,7 @@ describe("silent LINE ingestion", () => {
       postWebhook([lineEvent({ type: "join", replyToken: "reply-race-b" }, "C-disclosure-race")]),
     ]);
 
-    expect(replyCalls).toBe(1);
+    expect(replyCalls).toBe(0);
   });
 
   it("hashes group identifiers in lifecycle failure logs", async () => {

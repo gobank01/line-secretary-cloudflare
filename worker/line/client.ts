@@ -1,6 +1,3 @@
-export const DISCLOSURE_TEXT =
-  "สวัสดีครับ เลขากลุ่มจะอ่านข้อความในกลุ่มนี้เพื่อจัดหมวดหมู่และสรุปรายงาน เก็บข้อความดิบไม่เกิน 30 วัน และส่งผลแบบส่วนตัวให้เจ้าของบัญชีเท่านั้น หลังจากข้อความนี้บอทจะอยู่ในโหมดเงียบและไม่รบกวนการสนทนาครับ";
-
 const LINE_API = "https://api.line.me/v2/bot";
 
 export interface LineResult {
@@ -36,18 +33,6 @@ export async function getGroupSummary(groupId: string, token: string): Promise<{
     throw new Error("LINE group summary did not include a name");
   }
   return { groupName };
-}
-
-export async function replyDisclosure(replyToken: string, token: string): Promise<LineResult> {
-  const response = await fetch(`${LINE_API}/message/reply`, {
-    method: "POST",
-    headers: authorization(token),
-    body: JSON.stringify({
-      replyToken,
-      messages: [{ type: "text", text: DISCLOSURE_TEXT }],
-    }),
-  });
-  return resultFrom(response);
 }
 
 export async function pushDigest(

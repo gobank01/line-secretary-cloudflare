@@ -1,19 +1,16 @@
 import { Hono } from "hono";
 import {
   getAlertWords,
-  claimDisclosure,
   insertKeywordAlert,
   insertMessage,
-  markDisclosureSent,
   markGroupLeft,
   recordGroupJoin,
   registerRealGroup,
-  releaseDisclosureClaim,
   updateGroupLastMessage,
   updateGroupTitle,
 } from "../db/repositories";
 import type { AppEnv } from "../env";
-import { getGroupSummary, replyDisclosure } from "../line/client";
+import { getGroupSummary } from "../line/client";
 import { InvalidLinePayloadError, parseLineEvents, type LineGroupEvent } from "../line/events";
 import { verifyLineSignature } from "../line/signature";
 
@@ -56,22 +53,13 @@ async function handleEvent(
   );
 
   if (event.type === "join") {
+    // The bot is fully silent — it never speaks in groups, not even on join.
+    // The owner sees everything on the dashboard instead.
     await recordGroupJoin(env.DB, event.groupId, event.timestamp);
     if (group.created) {
       executionContext.waitUntil(
         refreshGroupName(env.DB, event.groupId, env.LINE_CHANNEL_ACCESS_TOKEN, event.timestamp),
       );
-    }
-    const disclosureClaimedAt = Date.now();
-    if (group.disclosureSentAt === null && await claimDisclosure(env.DB, event.groupId, disclosureClaimedAt)) {
-      try {
-        const reply = await replyDisclosure(event.replyToken, env.LINE_CHANNEL_ACCESS_TOKEN);
-        if (reply.ok) await markDisclosureSent(env.DB, event.groupId, Date.now());
-        else await releaseDisclosureClaim(env.DB, event.groupId, disclosureClaimedAt);
-      } catch (error) {
-        await releaseDisclosureClaim(env.DB, event.groupId, disclosureClaimedAt);
-        throw error;
-      }
     }
     return;
   }
