@@ -27,7 +27,7 @@
   "vars": {
     "APP_ENV": "local",
     "APP_TIMEZONE": "Asia/Bangkok",
-    "OPENROUTER_MODEL": "google/gemini-2.5-flash",
+    "OPENROUTER_MODEL": "google/gemini-3.7-flash",
     "REAL_GROUP_LIMIT": "10",
     "AUTOMATED_MONTHLY_PUSH_CAP": "280",
     "AI_DAILY_CALL_CAP": "120",
@@ -58,7 +58,7 @@
       "vars": {
         "APP_ENV": "preview",
         "APP_TIMEZONE": "Asia/Bangkok",
-        "OPENROUTER_MODEL": "google/gemini-2.5-flash",
+        "OPENROUTER_MODEL": "google/gemini-3.7-flash",
         "REAL_GROUP_LIMIT": "10",
         "AUTOMATED_MONTHLY_PUSH_CAP": "280",
         "AI_DAILY_CALL_CAP": "120",
@@ -89,7 +89,7 @@
       "vars": {
         "APP_ENV": "production",
         "APP_TIMEZONE": "Asia/Bangkok",
-        "OPENROUTER_MODEL": "google/gemini-2.5-flash",
+        "OPENROUTER_MODEL": "google/gemini-3.7-flash",
         "REAL_GROUP_LIMIT": "10",
         "AUTOMATED_MONTHLY_PUSH_CAP": "280",
         "AI_DAILY_CALL_CAP": "120",
