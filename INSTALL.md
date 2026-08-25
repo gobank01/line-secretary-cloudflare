@@ -21,6 +21,15 @@ wizard ทำแทนขั้นที่ 1-5 ในคู่มือนี�
 
 คู่มือนี้แยก `preview` และ `production` คนละ Worker, D1, Workflow และ secrets ตั้งแต่ต้น ทุกขั้นตอนเริ่มด้วย `LINE_PUSH_ENABLED=false`
 
+## 0. รู้ก่อนเริ่ม: workers.dev subdomain
+
+Cloudflare ให้ URL ฟรีแบบเดียวกับ `.vercel.app` คือ `<worker>.<ชื่อบัญชี>.workers.dev` แต่**บัญชีใหม่ต้องตั้งชื่อบัญชีครั้งแรกครั้งเดียว** — ตอน deploy ครั้งแรก wrangler จะถามเอง พิมพ์ชื่อ (a-z, 0-9, ขีด) แล้ว Enter
+
+ปัญหาที่อาจเจอ:
+
+- **ไม่มี prompt / error "register a workers.dev subdomain"** → รัน `CLOUDFLARE_ENV=preview npx wrangler deploy` ใน terminal ตรงๆ หนึ่งครั้งเพื่อให้ prompt โผล่
+- **แถบแดง "You cannot register a workers.dev subdomain"** ใน dashboard → บัญชีโดนธงจากระบบ ต้องเมล abusereply@cloudflare.com แนบ Account ID ขอปลดล็อก (เจอได้กับบัญชีเก่าที่ไม่เคยใช้ Workers — ตอบใน 1-3 วัน) หรือสมัครบัญชีใหม่อีเมลอื่น
+
 ## 1. ตรวจเครื่องมือและ login
 
 ```bash

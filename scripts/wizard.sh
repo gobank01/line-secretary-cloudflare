@@ -186,12 +186,31 @@ put_secret(){ # put_secret NAME env1 [env2...] — อ่านครั้ง�
   printf '%s' "$val"  # ส่งกลับให้ caller ที่ต้องใช้ต่อ (เช่น curl LINE API)
 }
 
+# รัน command แบบคง TTY (ให้ prompt โต้ตอบของ wrangler ทำงานได้) พร้อมเก็บ log
+run_tty(){ # run_tty <logfile> <cmd...>
+  local log="$1"; shift
+  if [ "$(uname)" = "Darwin" ]; then script -q "$log" "$@"
+  else script -qec "$*" "$log"; fi
+}
+
 deploy_env(){ # deploy 2 รอบ: รอบแรกได้ URL รอบสองฝัง URL จริงลง DASHBOARD_URL
   local e="$1"
-  npm "run" "deploy:$e" | tee ".generated/$e-deploy.log" || return 1
-  node scripts/configure-worker-url.mjs "$e" ".generated/$e-deploy.log" || return 1
+  # รอบแรกใช้ run_tty — บัญชีใหม่ wrangler จะถามตั้งชื่อ workers.dev subdomain ตรงนี้ (พิมพ์ชื่อแล้ว Enter)
+  run_tty ".generated/$e-deploy.log" npm run "deploy:$e" || { deploy_hint "$e"; return 1; }
+  node scripts/configure-worker-url.mjs "$e" ".generated/$e-deploy.log" || { deploy_hint "$e"; return 1; }
   npm "run" "deploy:$e" | tee ".generated/$e-deploy-final.log" || return 1
   node scripts/smoke-worker.mjs ".generated/$e-deploy-final.log"
+}
+
+deploy_hint(){ # อธิบายอาการที่เจอบ่อยตอน deploy ครั้งแรก
+  if grep -q "register a workers.dev subdomain" ".generated/$1-deploy.log" 2>/dev/null; then
+    say ""
+    say "  ${b}ยังไม่มี workers.dev subdomain ของบัญชี${n} (บัญชีใหม่ต้องตั้งครั้งแรกครั้งเดียว)"
+    say "  1. รัน: ${c}CLOUDFLARE_ENV=$1 npx wrangler deploy${n} ใน terminal ปกติ แล้วตอบ prompt ตั้งชื่อ"
+    say "  2. ถ้าขึ้นแถบแดง 'You cannot register a workers.dev subdomain' = บัญชีโดนธง"
+    say "     ให้เมลไป abusereply@cloudflare.com แนบ Account ID ขอปลดล็อก (ตอบใน 1-3 วัน)"
+    say "  เสร็จแล้วรัน wizard ใหม่ — ขั้นที่ผ่านแล้วจะถูกข้าม"
+  fi
 }
 
 worker_url(){

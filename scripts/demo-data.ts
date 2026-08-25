@@ -124,7 +124,7 @@ function sqlNullableText(value: string | null): string {
 export function renderDemoSeedSql(dataset: DemoDataset): string {
   const lines = [
     "PRAGMA foreign_keys = ON;",
-    "BEGIN TRANSACTION;",
+    // D1 rejects explicit BEGIN/COMMIT; `wrangler d1 execute --file` batches the file itself.
     "DELETE FROM alerts WHERE group_id IN (SELECT source_id FROM groups WHERE data_mode = 'demo');",
     "DELETE FROM reports WHERE group_id IN (SELECT source_id FROM groups WHERE data_mode = 'demo');",
     "DELETE FROM messages WHERE group_id IN (SELECT source_id FROM groups WHERE data_mode = 'demo');",
@@ -149,7 +149,7 @@ export function renderDemoSeedSql(dataset: DemoDataset): string {
     );
   }
 
-  lines.push("COMMIT;", "");
+  lines.push("");
   return lines.join("\n");
 }
 
