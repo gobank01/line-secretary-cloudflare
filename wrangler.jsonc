@@ -23,7 +23,7 @@
       "class_name": "GroupSummarizer"
     }
   ],
-  "triggers": { "crons": ["*/30 * * * *"] },
+  "triggers": { "crons": ["0 * * * *"] },
   "vars": {
     "APP_ENV": "local",
     "APP_TIMEZONE": "Asia/Bangkok",

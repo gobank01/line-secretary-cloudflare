@@ -7,17 +7,17 @@
 - รับข้อความจากกลุ่มจริงได้สูงสุด 10 กลุ่ม และแยกจากข้อมูลจำลอง 100 กลุ่มอย่างชัดเจน
 - ไม่ตอบข้อความทั่วไปในกลุ่ม มีเพียงข้อความเปิดเผยตัวครั้งเดียวเมื่อบอทเข้ากลุ่ม
 - ตรวจคำเร่งด่วนแบบ deterministic ทันที โดยไม่เรียก AI ใน webhook
-- ใช้ Cron Trigger ทุก 30 นาที (`*/30 * * * *`) เพื่อเลือกเฉพาะกลุ่มจริงที่ถึงเงื่อนไขไปสรุปใน Workflow
+- ใช้ Cron Trigger ทุกชั่วโมง (`0 * * * *`) เพื่อเลือกเฉพาะกลุ่มจริงที่ถึงเงื่อนไขไปสรุปใน Workflow — dashboard จึงสดขึ้นทุกชั่วโมง ส่วนคำเร่งด่วนขึ้น alert ทันทีตั้งแต่ webhook ไม่ต้องรอรอบ
 - ใช้ OpenRouter แบบมีเพดานจำนวน call และ input token ต่อวัน
 - แสดง dashboard สองมุมมอง: “ต้องจัดการ” และ “ตามหมวด” โดยใช้ตัวกรองชุดเดียวกัน
 - ให้เจ้าของแก้และล็อกหมวด พัก/เปิดกลุ่ม รับทราบ alert ลบข้อความดิบ และดู audit log ได้
-- ส่ง digest เข้า LINE เฉพาะ 10 ช่วงเวลาในวันทำงาน สูงสุด 280 ครั้ง/เดือน และปิดการส่งไว้เป็นค่าเริ่มต้น
+- ช่องทางหลักของเจ้าของคือ dashboard (บอทเงียบถาวร) — ระบบ digest เข้า LINE มีอยู่แต่ปิดไว้ (`LINE_PUSH_ENABLED=false`) และแนะนำให้ปิดตลอด ถ้าจะเปิดภายหลังมีเพดาน 10 ครั้ง/วันทำงาน 280 ครั้ง/เดือน
 
 ```mermaid
 flowchart LR
   LINE[LINE groups] -->|signed webhook| W[Cloudflare Worker]
   W -->|raw text + alerts| D1[(Cloudflare D1)]
-  C[Cron every 30 min] --> W
+  C[Cron hourly] --> W
   W -->|eligible real groups only| WF[Cloudflare Workflows]
   WF -->|bounded prompt| OR[OpenRouter]
   WF -->|report + category suggestion| D1
