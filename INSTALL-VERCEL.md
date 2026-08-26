@@ -68,6 +68,12 @@ npx vercel deploy --prod
 4. Headers: `Authorization: Bearer <CRON_SECRET ที่ตั้งไว้>`
 5. เปิด job แล้วดูผลรันแรกต้องได้ **HTTP 202** — endpoint ตอบรับทันทีแล้วสรุปต่อเบื้องหลัง (แผนฟรีของ cron-job.org ตัด request ที่ 30 วินาที จึงออกแบบให้ตอบเร็ว)
 
+## โหมดเดโม่ (โชว์หน้าห้อง ไม่ต้องมี Turso)
+
+ตั้ง env `DEMO_DB=1` (พร้อม `DASHBOARD_PASSWORD` และ `SESSION_SECRET`) — ระบบจะใช้ฐานข้อมูล demo 100 กลุ่มที่ seed มาตอน build เขียนบน `/tmp` ของ function ข้อมูลรีเซ็ตเองเมื่อ instance รีไซเคิล เหมาะกับการสาธิตเท่านั้น
+
+> ⚠️ ถ้า `vercel env add` แบบ pipe แล้วค่าไม่เข้า (เช็คด้วย `npx vercel env ls`) ให้พิมพ์ค่าตอน CLI ถามแทน หรือตั้งผ่านหน้าเว็บ Vercel → Settings → Environment Variables
+
 ## หมายเหตุ
 
 - Vercel Hobby มี cron ในตัวแต่**รายวันเท่านั้น** จึงใช้ cron-job.org แทน (รายชั่วโมงฟรี)

@@ -5,7 +5,8 @@
   "framework": null,
   "functions": {
     "api/**/*.mjs": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "node_modules/@libsql/**"
     }
   },
   "rewrites": [

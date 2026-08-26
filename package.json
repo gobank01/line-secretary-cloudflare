@@ -31,7 +31,8 @@
     "build:vercel": "vite build --config vite.vercel.config.ts && node scripts/build-api.mjs",
     "migrate:turso": "node scripts/migrate-turso.mjs",
     "smoke:vercel": "tsx scripts/smoke-vercel.ts",
-    "seed:demo:turso": "tsx scripts/seed-demo-turso.ts"
+    "seed:demo:turso": "tsx scripts/seed-demo-turso.ts",
+    "build:demo-db": "rm -f demo.db && TURSO_DATABASE_URL=file:demo.db node scripts/migrate-turso.mjs && TURSO_DATABASE_URL=file:demo.db tsx scripts/seed-demo-turso.ts"
   },
   "keywords": [],
   "author": "",

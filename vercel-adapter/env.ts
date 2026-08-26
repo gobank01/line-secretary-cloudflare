@@ -7,6 +7,9 @@ import {
 } from "../worker/workflows/group-summarizer";
 import { releaseAiCallSlot } from "../worker/ai/openrouter";
 import { createD1Shim } from "./d1-shim";
+import { existsSync, writeFileSync } from "node:fs";
+// @ts-expect-error generated at build time by scripts/build-api.mjs
+import { demoDbBase64 } from "./demo-db.generated.mjs";
 
 const inlineStep: WorkflowStepRunner = {
   async do(name, configOrCallback, maybeCallback) {
@@ -31,11 +34,16 @@ let cached: AppEnv | null = null;
 
 export function buildEnv(): AppEnv {
   if (cached) return cached;
-  if (process.env.VERCEL && !process.env.TURSO_DATABASE_URL) {
+  let url = process.env.TURSO_DATABASE_URL ?? "file:local.db";
+  if (process.env.DEMO_DB) {
+    // โหมดเดโม่หน้าห้อง: ใช้ demo.db ที่ seed ตอน build, เขียนบน /tmp
+    // instance รีไซเคิลเมื่อไหร่ข้อมูลรีเซ็ตเอง — ตั้งใจ ไม่ใช่บั๊ก
+    if (!existsSync("/tmp/demo.db")) writeFileSync("/tmp/demo.db", Buffer.from(demoDbBase64, "base64"));
+    url = "file:/tmp/demo.db";
+  } else if (process.env.VERCEL && !process.env.TURSO_DATABASE_URL) {
     // fail fast พร้อมข้อความชัด แทน SQLITE_CANTOPEN ปริศนาบน filesystem อ่านอย่างเดียว
     throw new Error("TURSO_DATABASE_URL is not set — run: npx vercel env add TURSO_DATABASE_URL production");
   }
-  const url = process.env.TURSO_DATABASE_URL ?? "file:local.db";
   const db = createD1Shim(url, process.env.TURSO_AUTH_TOKEN) as unknown as AppEnv["DB"];
 
   const env: AppEnv = {

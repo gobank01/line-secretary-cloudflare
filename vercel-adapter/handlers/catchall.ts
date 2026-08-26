@@ -5,4 +5,19 @@ import { buildEnv } from "../env";
 
 const app = createApp();
 
-export default { fetch: (request: Request) => app.fetch(request, buildEnv()) };
+async function fetchWithDebug(request: Request): Promise<Response> {
+  try {
+    return await app.fetch(request, buildEnv());
+  } catch (error) {
+    // DEBUG_ERRORS ใช้ชั่วคราวตอนไล่ปัญหา deploy เท่านั้น — ห้ามเปิดใน production จริง
+    if (process.env.DEBUG_ERRORS) {
+      return Response.json(
+        { error: String(error), stack: error instanceof Error ? error.stack?.split("\n").slice(0, 6) : null },
+        { status: 500 },
+      );
+    }
+    throw error;
+  }
+}
+
+export default { fetch: fetchWithDebug };
